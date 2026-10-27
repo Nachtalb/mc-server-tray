@@ -15,12 +15,13 @@ static class Program
         if (snap >= 0 && snap + 1 < args.Length)
         {
             // Debug aid: render the server list to a PNG once the first ping is in, then exit.
-            // Optional: --mouse X,Y (GUI pixels) and --select ROW to check hover and selection.
+            // Optional: --mouse X,Y (GUI pixels) and --select ROW to check hover and selection,
+            // or --menu to render the tray menu instead.
             string? Arg(string name) => Array.IndexOf(args, name) is int i and >= 0 && i + 1 < args.Length ? args[i + 1] : null;
             var mouse = Arg("--mouse")?.Split(',').Select(int.Parse).ToArray() is [int mx, int my] ? new Point(mx, my) : new Point(-1, -1);
             int select = int.TryParse(Arg("--select"), out int s) ? s : -1;
             using var shot = new TrayApp(showTray: false);
-            shot.SnapshotAsync(args[snap + 1], mouse, select).ContinueWith(_ => Application.Exit(), TaskScheduler.FromCurrentSynchronizationContext());
+            shot.SnapshotAsync(args[snap + 1], mouse, select, args.Contains("--menu")).ContinueWith(_ => Application.Exit(), TaskScheduler.FromCurrentSynchronizationContext());
             Application.Run();
             return;
         }
@@ -57,6 +58,8 @@ sealed class TrayApp : IDisposable
     readonly string _prismRoot = McProfile.PrismRoot();
     readonly ServerListForm _popup;
     McAssets _assets;
+    McSound _click;
+    readonly McMenuRenderer _menuRenderer;
     McProfile? _profile;
     string? _lookSignature;
     Icon _iconIdle;
@@ -67,9 +70,26 @@ sealed class TrayApp : IDisposable
     readonly Dictionary<string, Bitmap?> _iconCache = new();
     Task? _poll;
 
-    public async Task SnapshotAsync(string path, Point mouse, int selectedRow)
+    public async Task SnapshotAsync(string path, Point mouse, int selectedRow, bool menu)
     {
         await PollAsync();
+        if (menu)
+        {
+            // The tray menu and its Profile submenu, opened off-screen and drawn side by side.
+            BuildMenu();
+            _menu.Show(-10000, -10000);
+            var profiles = _menu.Items.OfType<ToolStripMenuItem>().First(i => i.HasDropDownItems);
+            profiles.ShowDropDown();
+            Application.DoEvents();
+            var sub = profiles.DropDown;
+            using var shot = new Bitmap(_menu.Width + sub.Width + 8, Math.Max(_menu.Height, sub.Height));
+            using (var g = Graphics.FromImage(shot)) g.Clear(Color.FromArgb(32, 32, 32));
+            _menu.DrawToBitmap(shot, new Rectangle(0, 0, _menu.Width, _menu.Height));
+            sub.DrawToBitmap(shot, new Rectangle(_menu.Width + 8, 0, sub.Width, sub.Height));
+            shot.Save(path, ImageFormat.Png);
+            _menu.Close();
+            return;
+        }
         _popup.Relayout();
         _popup.Simulate(mouse, selectedRow);
         using var bmp = new Bitmap(_popup.Width, _popup.Height);
@@ -80,6 +100,8 @@ sealed class TrayApp : IDisposable
     public TrayApp(bool showTray = true)
     {
         (_profile, _assets) = LoadLook();
+        _click = new McSound(_assets.Sound("random/click"), 0.25f);
+        _menuRenderer = new McMenuRenderer(() => _assets);
         (_iconIdle, _iconActive) = MakeTrayIcons(_assets.Sprite("block/grass_block_side.png")?.Image);
         _servers = LoadServers(_profile is { } p ? [p] : []);
 
@@ -125,6 +147,8 @@ sealed class TrayApp : IDisposable
         var old = _assets;
         (_profile, _assets) = LoadLook();
         _popup.SetAssets(_assets);
+        _click.Dispose();
+        _click = new McSound(_assets.Sound("random/click"), 0.25f);
         (_iconIdle, _iconActive) = MakeTrayIcons(_assets.Sprite("block/grass_block_side.png")?.Image);
         UpdateTray();
         old.Dispose();
@@ -348,6 +372,19 @@ sealed class TrayApp : IDisposable
 
         _menu.Items.Add(new ToolStripSeparator());
         _menu.Items.Add("Exit", null, (_, _) => Application.Exit());
+
+        _menuRenderer.Apply(_menu);
+        HookClickSound(_menu);
+    }
+
+    /// Menu entries click like the game's buttons.
+    void HookClickSound(ToolStripDropDown menu)
+    {
+        foreach (var item in menu.Items.OfType<ToolStripMenuItem>())
+        {
+            if (item.HasDropDownItems) HookClickSound(item.DropDown);
+            else if (item.Enabled) item.Click += (_, _) => _click.Play();
+        }
     }
 
     /// "Profile" submenu: automatic (last played) or a fixed profile, grouped by launcher.
