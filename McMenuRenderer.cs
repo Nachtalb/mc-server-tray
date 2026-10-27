@@ -4,10 +4,14 @@ namespace McServerTray;
 
 /// Draws the tray menu like a Minecraft tooltip: the pack's tooltip background and frame,
 /// the bitmap font with its shadow, and pixel-sharp item images.
+/// An item whose Tag is a string shows it as a grey second line under its text.
 sealed class McMenuRenderer(Func<McAssets> assets) : ToolStripRenderer
 {
     const int ItemHeight = 14;
+    const int SubtitledHeight = 24;
     const int ImageSize = 10;
+
+    static string? Subtitle(ToolStripItem item) => item.Tag as string;
 
     /// GUI scale for the strip's monitor (2 at 100%, like the popup).
     static int Scale(ToolStrip strip) => Math.Max(1, (int)Math.Round(strip.DeviceDpi / 96.0 * 2));
@@ -24,13 +28,16 @@ sealed class McMenuRenderer(Func<McAssets> assets) : ToolStripRenderer
         menu.Padding = new Padding(3 * s, 4 * s, 3 * s, 4 * s);
 
         var items = menu.Items.OfType<ToolStripMenuItem>().ToList();
-        float textWidth = items.Count == 0 ? 0 : items.Max(i => font.Width(i.Text ?? "") + (i.Font.Bold ? (i.Text ?? "").Length : 0));
+        float textWidth = items.Count == 0 ? 0 : items.Max(i => Math.Max(
+            font.Width(i.Text ?? "") + (i.Font.Bold ? (i.Text ?? "").Length : 0),
+            font.Width(Subtitle(i) ?? "")));
         int width = (int)((ImageSize + 10 + textWidth + 16) * s);
         int height = 0;
         foreach (ToolStripItem item in menu.Items)
         {
             item.AutoSize = false;
-            item.Size = new Size(width, (item is ToolStripSeparator ? 5 : ItemHeight) * s);
+            int h = item is ToolStripSeparator ? 5 : Subtitle(item) != null ? SubtitledHeight : ItemHeight;
+            item.Size = new Size(width, h * s);
             height += item.Height;
             if (item is ToolStripMenuItem { HasDropDownItems: true, DropDown: ToolStripDropDownMenu sub })
                 Apply(sub);
@@ -88,7 +95,14 @@ sealed class McMenuRenderer(Func<McAssets> assets) : ToolStripRenderer
         var g = e.Graphics;
         var state = g.Save();
         PixelArt(g, s);
-        assets().Font.Draw(g, item.Text ?? "", style, (float)e.TextRectangle.X / s, (item.Height / s - 8) / 2f);
+        var font = assets().Font;
+        float x = (float)e.TextRectangle.X / s;
+        if (Subtitle(item) is { } subtitle)
+        {
+            font.Draw(g, item.Text ?? "", style, x, 3);
+            font.Draw(g, subtitle, McStyle.Gray, x, 13);
+        }
+        else font.Draw(g, item.Text ?? "", style, x, (item.Height / s - 8) / 2f);
         g.Restore(state);
     }
 

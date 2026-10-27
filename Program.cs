@@ -389,7 +389,11 @@ sealed class TrayApp : IDisposable
     {
         _menu.Items.Clear();
         if (_profile != null)
-            _menu.Items.Add(new ToolStripMenuItem($"Launch Game ({_profile.Name})", ProfileImage(_profile), (_, _) => LaunchGame()) { Font = new Font(_menu.Font, FontStyle.Bold) });
+            _menu.Items.Add(new ToolStripMenuItem("Launch Game", ProfileImage(_profile), (_, _) => LaunchGame())
+            {
+                Font = new Font(_menu.Font, FontStyle.Bold),
+                Tag = _profile.Name,
+            });
         _menu.Items.Add("Show servers", null, (_, _) => TogglePopup());
         _menu.Items.Add("Refresh now", null, async (_, _) => await PollAsync());
         _menu.Items.Add(BuildProfileMenu());
@@ -424,9 +428,10 @@ sealed class TrayApp : IDisposable
 
         var menu = new ToolStripMenuItem("Profile");
         string lastPlayed = profiles.MaxBy(p => p.LastLaunch)?.Name ?? "none found";
-        menu.DropDownItems.Add(new ToolStripMenuItem($"Automatic (last played: {lastPlayed})", null, (_, _) => SetDefaultProfile(null))
+        menu.DropDownItems.Add(new ToolStripMenuItem("Automatic", null, (_, _) => SetDefaultProfile(null))
         {
             Checked = chosen == null,
+            Tag = $"Last played: {lastPlayed}",
         });
 
         foreach (var group in profiles.GroupBy(p => p.Launcher))
