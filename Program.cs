@@ -1,5 +1,6 @@
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using Microsoft.Toolkit.Uwp.Notifications;
 using Microsoft.Win32;
 using static McServerTray.McDraw;
 
@@ -37,6 +38,8 @@ static class Program
         }
 
         using var app = new TrayApp();
+        // Toast buttons and clicks (also when Windows started us because of one).
+        ToastNotificationManagerCompat.OnActivated += e => app.HandleToast(ToastArguments.Parse(e.Argument));
         ThreadPool.RegisterWaitForSingleObject(show, (_, _) => app.ShowPopup(), null, Timeout.Infinite, false);
         if (args.Contains("--show")) app.ShowPopup();
         Application.Run();
@@ -122,7 +125,6 @@ sealed class TrayApp : IDisposable
         {
             if (e.Button == MouseButtons.Left) TogglePopup();
         };
-        _tray.BalloonTipClicked += (_, _) => TogglePopup();
         _menu.Opening += (_, _) => BuildMenu();
 
         _timer.Interval = (int)PollInterval.TotalMilliseconds;
@@ -178,8 +180,7 @@ sealed class TrayApp : IDisposable
         if (instance == null || exe == null)
         {
             Clipboard.SetText(view.Entry.Address);
-            _tray.ShowBalloonTip(5000, view.Entry.Name,
-                $"Start {profiles[0].Name} in the {profiles[0].Launcher} and join - the address {view.Entry.Address} is on your clipboard.", ToolTipIcon.Info);
+            Notify(view.Entry.Name, $"Start {profiles[0].Name} in the {profiles[0].Launcher} and join - the address {view.Entry.Address} is on your clipboard.");
             return;
         }
         System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe)
@@ -203,7 +204,7 @@ sealed class TrayApp : IDisposable
         }
         catch (System.ComponentModel.Win32Exception e)
         {
-            _tray.ShowBalloonTip(5000, "Can't launch", e.Message, ToolTipIcon.Warning);
+            Notify("Can't launch", e.Message);
         }
     }
 
@@ -212,11 +213,11 @@ sealed class TrayApp : IDisposable
         try
         {
             if (!Launchers.Open(launcher))
-                _tray.ShowBalloonTip(5000, "Can't launch", $"Couldn't find the {launcher}.", ToolTipIcon.Warning);
+                Notify("Can't launch", $"Couldn't find the {launcher}.");
         }
         catch (System.ComponentModel.Win32Exception e)
         {
-            _tray.ShowBalloonTip(5000, "Can't launch", e.Message, ToolTipIcon.Warning);
+            Notify("Can't launch", e.Message);
         }
     }
 
@@ -346,18 +347,74 @@ sealed class TrayApp : IDisposable
             _status[server.Address] = now;
         }
 
-        if (joins.Count > 0)
-        {
-            var (title, body) = JoinNotification(joins);
-            _tray.ShowBalloonTip(5000, title, body, ToolTipIcon.None);
-        }
+        if (joins.Count > 0) ShowJoinToast(joins);
 
         UpdateTray();
         _popup.Invalidate();
     }
 
     /// New players on a server since the last poll; Names is empty when the server hides its list.
-    record PlayerJoin(string Server, List<string> Names, int Online);
+    record PlayerJoin(string Server, string Address, List<string> Names, int Online);
+
+    /// A Windows toast with the server's icon and a Join button per server (clicking the toast opens the list).
+    void ShowJoinToast(List<PlayerJoin> joins)
+    {
+        var (title, body) = JoinNotification(joins);
+        var toast = new ToastContentBuilder()
+            .AddArgument("action", "show")
+            .AddText(title)
+            .AddText(body);
+        if (ToastImage(joins[0].Address) is { } image) toast.AddAppLogoOverride(new Uri(image));
+        foreach (var join in joins.Take(5))
+            toast.AddButton(new ToastButton()
+                .SetContent(joins.Count == 1 ? "Join Server" : $"Join {join.Server}")
+                .AddArgument("action", "join")
+                .AddArgument("server", join.Address));
+        toast.Show();
+    }
+
+    /// Plain informational toast (things that went wrong, hints).
+    static void Notify(string title, string body) =>
+        new ToastContentBuilder().AddText(title).AddText(body).Show();
+
+    /// The server's icon (favicon, its saved icon, or the game's default) as a file the toast can load.
+    /// Upscaled pixel-sharp, since Windows would blur a 64px icon.
+    string? ToastImage(string address)
+    {
+        var view = Views().FirstOrDefault(v => v.Entry.Address == address);
+        var icon = view?.Icon ?? _assets.Sprite("misc/unknown_server.png")?.Image;
+        if (icon == null) return null;
+        try
+        {
+            string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "McServerTray", "toast");
+            Directory.CreateDirectory(dir);
+            string file = Path.Combine(dir, Convert.ToHexString(System.Security.Cryptography.SHA1.HashData(System.Text.Encoding.UTF8.GetBytes(address)))[..12] + ".png");
+            using var big = new Bitmap(192, 192);
+            using (var g = Graphics.FromImage(big))
+            {
+                g.InterpolationMode = InterpolationMode.NearestNeighbor;
+                g.PixelOffsetMode = PixelOffsetMode.Half;
+                g.DrawImage(icon, 0, 0, 192, 192);
+            }
+            big.Save(file, ImageFormat.Png);
+            return file;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Runtime.InteropServices.ExternalException)
+        {
+            return null;
+        }
+    }
+
+    /// Toast clicks arrive on a background thread (or start the app); act on the UI thread.
+    public void HandleToast(ToastArguments args) => _popup.BeginInvoke(() =>
+    {
+        if (!args.TryGetValue("action", out string action)) return;
+        if (action == "join" && args.TryGetValue("server", out string server) &&
+            Views().FirstOrDefault(v => v.Entry.Address == server) is { } view)
+            Join(view);
+        else if (action == "show" && !_popup.Visible)
+            TogglePopup();
+    });
 
     static PlayerJoin? DescribeJoin(ServerEntry server, ServerStatus? before, ServerStatus now)
     {
@@ -367,9 +424,9 @@ sealed class TrayApp : IDisposable
         var prevNames = before is { Online: true } ? before.PlayerNames.ToHashSet() : [];
         var newNames = now.PlayerNames.Where(n => !prevNames.Contains(n)).ToList();
 
-        if (newNames.Count > 0) return new PlayerJoin(server.Name, newNames, now.PlayersOnline);
+        if (newNames.Count > 0) return new PlayerJoin(server.Name, server.Address, newNames, now.PlayersOnline);
         // Server hides its player list; all we can report is the count.
-        if (now.PlayersOnline > prevCount) return new PlayerJoin(server.Name, [], now.PlayersOnline);
+        if (now.PlayersOnline > prevCount) return new PlayerJoin(server.Name, server.Address, [], now.PlayersOnline);
         return null;
     }
 
