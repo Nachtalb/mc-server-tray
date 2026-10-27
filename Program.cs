@@ -159,6 +159,38 @@ sealed class TrayApp : IDisposable
         });
     }
 
+    /// Starts the default profile without joining anything. Only Prism can start a given profile;
+    /// the other launchers are just opened.
+    void LaunchGame()
+    {
+        if (_profile == null) return;
+        string programs = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        try
+        {
+            switch (_profile)
+            {
+                case { PrismInstance: { } instance } when PrismExecutable() is { } prism:
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(prism) { ArgumentList = { "--launch", instance } });
+                    break;
+                case { Launcher: "Minecraft Launcher" }:
+                    System.Diagnostics.Process.Start("explorer.exe", @"shell:AppsFolder\Microsoft.4297127D64EC6_8wekyb3d8bbwe!Minecraft");
+                    break;
+                case { Launcher: "Modrinth App" } when new[] { Path.Combine(programs, "Modrinth App", "Modrinth App.exe"), Path.Combine(local, "Modrinth App", "Modrinth App.exe") }
+                        .FirstOrDefault(File.Exists) is { } modrinth:
+                    System.Diagnostics.Process.Start(modrinth);
+                    break;
+                default:
+                    _tray.ShowBalloonTip(5000, "Can't launch", $"Couldn't find the {_profile.Launcher}.", ToolTipIcon.Warning);
+                    break;
+            }
+        }
+        catch (System.ComponentModel.Win32Exception e)
+        {
+            _tray.ShowBalloonTip(5000, "Can't launch", e.Message, ToolTipIcon.Warning);
+        }
+    }
+
     string? PrismExecutable()
     {
         string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -304,6 +336,8 @@ sealed class TrayApp : IDisposable
     void BuildMenu()
     {
         _menu.Items.Clear();
+        if (_profile != null)
+            _menu.Items.Add(new ToolStripMenuItem($"Launch Game ({_profile.Name})", null, (_, _) => LaunchGame()) { Font = new Font(_menu.Font, FontStyle.Bold) });
         _menu.Items.Add("Show servers", null, (_, _) => TogglePopup());
         _menu.Items.Add("Refresh now", null, async (_, _) => await PollAsync());
         _menu.Items.Add(BuildProfileMenu());
