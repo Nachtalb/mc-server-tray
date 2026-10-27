@@ -70,6 +70,10 @@ sealed class McMenuRenderer(Func<McAssets> assets) : ToolStripRenderer
 
         menu.AutoSize = false;
         menu.Size = new Size(width, height);
+
+        // Same rounded window corners as the server list popup.
+        if (menu.IsHandleCreated) Native.RoundCorners(menu.Handle);
+        else menu.HandleCreated += (_, _) => Native.RoundCorners(menu.Handle);
     }
 
     protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e)

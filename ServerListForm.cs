@@ -1,7 +1,6 @@
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using static McServerTray.McDraw;
-using System.Runtime.InteropServices;
 
 namespace McServerTray;
 
@@ -77,13 +76,8 @@ sealed class ServerListForm : Form
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
-        // Windows 11: small rounded corners and the system shadow, like other flyouts.
-        int round = 3; // DWMWCP_ROUNDSMALL
-        DwmSetWindowAttribute(Handle, 33, ref round, sizeof(int));
+        Native.RoundCorners(Handle);
     }
-
-    [DllImport("dwmapi.dll")]
-    static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
 
     public void Toggle()
     {
