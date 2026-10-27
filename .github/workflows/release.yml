@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Version from tag
+        id: version
+        shell: pwsh
+        run: '"version=$("${{ github.ref_name }}".TrimStart("v"))" >> $env:GITHUB_OUTPUT'
+
+      - name: Publish
+        run: dotnet publish -c Release -o publish -p:DebugType=none -p:Version=${{ steps.version.outputs.version }}
+
+      - name: Portable zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path publish\* -DestinationPath "dist\McServerTray-${{ steps.version.outputs.version }}-portable.zip"
+
+      - name: Installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+          & $iscc /DAppVersion=${{ steps.version.outputs.version }} /DPublishDir=..\publish installer\McServerTray.iss
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $notes = @"
+          **Installer** (`McServerTray-${{ steps.version.outputs.version }}-setup.exe`): installs for your user, adds a Start menu entry and optionally starts with Windows. If the .NET 9 Desktop Runtime is missing it downloads and installs it from Microsoft.
+
+          **Portable** (`McServerTray-${{ steps.version.outputs.version }}-portable.zip`): unzip and run `McServerTray.exe`. Needs the [.NET 9 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/9.0); Windows offers to download it if it's missing.
+          "@
+          gh release create "${{ github.ref_name }}" (Get-ChildItem dist).FullName --title "McServerTray ${{ steps.version.outputs.version }}" --notes $notes
