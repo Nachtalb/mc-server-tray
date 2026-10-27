@@ -1,6 +1,7 @@
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using Microsoft.Win32;
+using static McServerTray.McDraw;
 
 namespace McServerTray;
 
@@ -68,6 +69,7 @@ sealed class TrayApp : IDisposable
     List<ServerEntry> _servers = [];
     readonly Dictionary<string, ServerStatus> _status = new();
     readonly Dictionary<string, Bitmap?> _iconCache = new();
+    readonly Dictionary<IconCube, Bitmap?> _cubeCache = new();
     Task? _poll;
 
     public async Task SnapshotAsync(string path, Point mouse, int selectedRow, bool menu)
@@ -147,6 +149,7 @@ sealed class TrayApp : IDisposable
         var old = _assets;
         (_profile, _assets) = LoadLook();
         _popup.SetAssets(_assets);
+        _cubeCache.Clear();
         _click.Dispose();
         _click = new McSound(_assets.Sound("random/click"), 0.25f);
         (_iconIdle, _iconActive) = MakeTrayIcons(_assets.Sprite("block/grass_block_side.png")?.Image);
@@ -258,10 +261,16 @@ sealed class TrayApp : IDisposable
             }
         }
         if (DecodeIcon(icon.DataUri) is { } fromUri) return fromUri;
-        foreach (string texture in icon.Textures)
-            if (_assets.Sprite(texture) is { } sprite)
-                return FirstFrame(sprite.Image);
-        return null;
+        if (icon.Flat != null && _assets.Sprite(icon.Flat) is { } flat) return FirstFrame(flat.Image);
+        if (icon.Cube is not { } cube) return null;
+
+        if (_cubeCache.TryGetValue(cube, out var built)) return built;
+        Bitmap? Face(IReadOnlyList<string> candidates) =>
+            candidates.Select(_assets.Sprite).OfType<Sprite>().Select(s => FirstFrame(s.Image)).FirstOrDefault();
+        var (top, front, side) = (Face(cube.Top), Face(cube.Front), Face(cube.Side));
+        return _cubeCache[cube] = top != null && front != null && side != null
+            ? IsoCube(top, front, side, cube.TopTint, cube.SideTint)
+            : null;
     }
 
     /// Animated textures are a vertical strip of square frames; keep the first one.

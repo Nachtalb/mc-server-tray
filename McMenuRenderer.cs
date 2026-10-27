@@ -7,9 +7,9 @@ namespace McServerTray;
 /// An item whose Tag is a string shows it as a grey second line under its text.
 sealed class McMenuRenderer(Func<McAssets> assets) : ToolStripRenderer
 {
-    const int ItemHeight = 14;
+    const int ItemHeight = 18;
     const int SubtitledHeight = 24;
-    const int ImageSize = 10;
+    const int ImageSize = 16;
 
     static string? Subtitle(ToolStripItem item) => item.Tag as string;
 
@@ -120,7 +120,14 @@ sealed class McMenuRenderer(Func<McAssets> assets) : ToolStripRenderer
             Fill(g, Rectangle.Round(RectangleF.Inflate(r, 1, 1)), 0xFFFFFF);
             Fill(g, Rectangle.Round(r), 0x000000);
         }
-        Blit(g, img, r);
+        if (img.Width > ImageSize * s)
+        {
+            // Rendered cubes and launcher icons are bigger than the slot: shrink smoothly, not pixel-dropping.
+            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+            g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+            g.DrawImage(img, r);
+        }
+        else Blit(g, img, r);
         g.Restore(state);
     }
 

@@ -90,6 +90,44 @@ static class McDraw
     public static void Blit(Graphics g, Bitmap tex, RectangleF dest, RectangleF src) =>
         g.DrawImage(tex, [dest.Location, new PointF(dest.Right, dest.Top), new PointF(dest.Left, dest.Bottom)], src, GraphicsUnit.Pixel, Clamp);
 
+    /// An isometric block like the launchers draw: lit top, front face on the left, side on the right,
+    /// each face shaded and optionally tinted (grass and leaves are grey in the texture).
+    public static Bitmap IsoCube(Bitmap top, Bitmap front, Bitmap side, int? topTint, int? sideTint, int size = 64)
+    {
+        var bmp = new Bitmap(size, size);
+        using var g = Graphics.FromImage(bmp);
+        g.InterpolationMode = InterpolationMode.NearestNeighbor;
+        g.PixelOffsetMode = PixelOffsetMode.Half;
+        float s = size, q = size / 4f, h = size / 2f;
+
+        void Face(Bitmap tex, PointF topLeft, PointF topRight, PointF bottomLeft, float shade, int? tint)
+        {
+            float r = shade, gr = shade, b = shade;
+            if (tint is int t)
+            {
+                r *= (t >> 16 & 0xFF) / 255f;
+                gr *= (t >> 8 & 0xFF) / 255f;
+                b *= (t & 0xFF) / 255f;
+            }
+            using var attrs = new ImageAttributes();
+            attrs.SetWrapMode(WrapMode.TileFlipXY);
+            attrs.SetColorMatrix(new ColorMatrix(
+            [
+                [r, 0, 0, 0, 0],
+                [0, gr, 0, 0, 0],
+                [0, 0, b, 0, 0],
+                [0, 0, 0, 1, 0],
+                [0, 0, 0, 0, 1],
+            ]));
+            g.DrawImage(tex, [topLeft, topRight, bottomLeft], new RectangleF(0, 0, tex.Width, tex.Height), GraphicsUnit.Pixel, attrs);
+        }
+
+        Face(top, new PointF(0, q), new PointF(h, 0), new PointF(h, h), 1f, topTint);
+        Face(front, new PointF(0, q), new PointF(h, h), new PointF(0, s - q), 0.8f, sideTint);
+        Face(side, new PointF(h, h), new PointF(s, q), new PointF(h, s), 0.6f, sideTint);
+        return bmp;
+    }
+
     public static void Fill(Graphics g, Rectangle r, int rgb)
     {
         using var b = new SolidBrush(Color.FromArgb(255, Color.FromArgb(rgb)));
