@@ -74,6 +74,10 @@ sealed class TrayApp : IDisposable
     readonly Dictionary<IconCube, Bitmap?> _cubeCache = new();
     Task? _poll;
 
+    /// Tag for menu items that toggle in place instead of closing the menu.
+    static readonly object KeepOpen = new();
+    bool _keepMenuOpen;
+
     public async Task SnapshotAsync(string path, Point mouse, int selectedRow, bool menu)
     {
         await PollAsync();
@@ -126,6 +130,12 @@ sealed class TrayApp : IDisposable
             if (e.Button == MouseButtons.Left) TogglePopup();
         };
         _menu.Opening += (_, _) => BuildMenu();
+        _menu.ItemClicked += (_, e) => _keepMenuOpen = e.ClickedItem?.Tag == KeepOpen;
+        _menu.Closing += (_, e) =>
+        {
+            if (e.CloseReason == ToolStripDropDownCloseReason.ItemClicked && _keepMenuOpen) e.Cancel = true;
+            _keepMenuOpen = false;
+        };
 
         _timer.Interval = (int)PollInterval.TotalMilliseconds;
         _timer.Tick += async (_, _) => await PollAsync();
@@ -473,8 +483,13 @@ sealed class TrayApp : IDisposable
         _menu.Items.Add("Show servers", null, (_, _) => TogglePopup());
         _menu.Items.Add(BuildProfileMenu());
 
-        var startup = new ToolStripMenuItem("Start with Windows") { Checked = IsStartupEnabled() };
-        startup.Click += (_, _) => SetStartup(!startup.Checked);
+        // A toggle: flips in place and keeps the menu open (see the Closing handler).
+        var startup = new ToolStripMenuItem("Start with Windows") { Checked = IsStartupEnabled(), Tag = KeepOpen };
+        startup.Click += (_, _) =>
+        {
+            SetStartup(!startup.Checked);
+            startup.Checked = IsStartupEnabled();
+        };
         _menu.Items.Add(startup);
 
         _menu.Items.Add(new ToolStripSeparator());
