@@ -49,10 +49,13 @@ sealed class TrayApp : IDisposable
     readonly NotifyIcon _tray = new();
     readonly ContextMenuStrip _menu = new();
     readonly System.Windows.Forms.Timer _timer = new();
-    readonly McAssets _assets;
+    readonly string _prismRoot = PrismRoot();
     readonly ServerListForm _popup;
-    readonly Icon _iconIdle;
-    readonly Icon _iconActive;
+    McAssets _assets;
+    McProfile? _profile;
+    DateTime _optionsStamp;
+    Icon _iconIdle;
+    Icon _iconActive;
 
     List<ServerEntry> _servers = [];
     readonly Dictionary<string, ServerStatus> _status = new();
@@ -70,10 +73,9 @@ sealed class TrayApp : IDisposable
 
     public TrayApp(bool showTray = true)
     {
-        string prismRoot = PrismRoot();
-        _assets = McAssets.Load(prismRoot);
-        (_iconIdle, _iconActive) = MakeTrayIcons(_assets.Texture("block/grass_block_side.png"));
-        _servers = LoadServers(prismRoot);
+        (_profile, _assets) = LoadLook();
+        (_iconIdle, _iconActive) = MakeTrayIcons(_assets.Sprite("block/grass_block_side.png")?.Image);
+        _servers = LoadServers(_prismRoot);
 
         _popup = new ServerListForm(_assets, Views, PollAsync);
         // ShowPopup marshals onto the popup, which needs a handle even while it's hidden.
@@ -94,6 +96,28 @@ sealed class TrayApp : IDisposable
         _timer.Tick += async (_, _) => await PollAsync();
         _timer.Start();
         _ = PollAsync();
+    }
+
+    /// Textures come from the Prism instance played last: its game version and enabled resource packs.
+    (McProfile? profile, McAssets assets) LoadLook()
+    {
+        var profile = McProfile.PrismInstances(_prismRoot).MaxBy(p => p.LastLaunch);
+        _optionsStamp = profile != null && File.Exists(profile.OptionsFile) ? File.GetLastWriteTimeUtc(profile.OptionsFile) : default;
+        return (profile, McAssets.Load(_prismRoot, profile));
+    }
+
+    /// Picks up resource pack changes (or a different instance being played) without a restart.
+    void ReloadLookIfChanged()
+    {
+        var latest = McProfile.PrismInstances(_prismRoot).MaxBy(p => p.LastLaunch);
+        var stamp = latest != null && File.Exists(latest.OptionsFile) ? File.GetLastWriteTimeUtc(latest.OptionsFile) : default;
+        if (latest?.GameDir == _profile?.GameDir && stamp == _optionsStamp) return;
+
+        var old = _assets;
+        (_profile, _assets) = LoadLook();
+        _popup.SetAssets(_assets);
+        (_iconIdle, _iconActive) = MakeTrayIcons(_assets.Sprite("block/grass_block_side.png")?.Image);
+        old.Dispose();
     }
 
     public void ShowPopup() => _popup.BeginInvoke(() =>
@@ -178,7 +202,8 @@ sealed class TrayApp : IDisposable
 
     async Task PollOnceAsync()
     {
-        var servers = LoadServers(PrismRoot());
+        ReloadLookIfChanged();
+        var servers = LoadServers(_prismRoot);
         bool listChanged = !servers.Select(s => s.Address).SequenceEqual(_servers.Select(s => s.Address));
         _servers = servers;
         if (listChanged && _popup.Visible) _popup.Relayout();

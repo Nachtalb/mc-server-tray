@@ -14,14 +14,14 @@ sealed class ServerListForm : Form
     const int RowHeight = 36;
     const int HeaderHeight = 24;
     const int FooterHeight = 30;
-    const int ButtonWidth = 100;
+    const int ButtonWidth = 98;
     const int ButtonHeight = 20;
 
-    readonly McAssets _assets;
     readonly Func<IReadOnlyList<ServerView>> _views;
     readonly Func<Task> _refresh;
     readonly System.Windows.Forms.Timer _anim = new() { Interval = 100 };
     readonly ImageAttributes _clamp = new();
+    McAssets _assets;
     int _scale = 2;
     Point _mouse = new(-1, -1);
     long _hiddenAt;
@@ -44,7 +44,12 @@ sealed class ServerListForm : Form
 
         _anim.Tick += (_, _) => Invalidate();
         Deactivate += (_, _) => HidePopup();
-        KeyDown += (_, e) => { if (e.KeyCode == Keys.Escape) HidePopup(); };
+    }
+
+    public void SetAssets(McAssets assets)
+    {
+        _assets = assets;
+        Invalidate();
     }
 
     protected override CreateParams CreateParams
@@ -53,7 +58,6 @@ sealed class ServerListForm : Form
         {
             var cp = base.CreateParams;
             cp.ExStyle |= 0x80; // WS_EX_TOOLWINDOW: keep it out of Alt+Tab
-            cp.ClassStyle |= 0x20000; // CS_DROPSHADOW
             return cp;
         }
     }
@@ -84,19 +88,29 @@ sealed class ServerListForm : Form
     {
         var screen = Screen.FromPoint(Cursor.Position);
         _scale = Math.Max(1, (int)Math.Round(DeviceDpi / 96.0 * 2));
-        int rows = Math.Max(1, _views().Count);
-        var size = new Size(Width0 * _scale, (HeaderHeight + rows * RowHeight + 6 + FooterHeight) * _scale);
+        var size = new Size(Width0 * _scale, GuiHeight * _scale);
         var area = screen.WorkingArea;
         Bounds = new Rectangle(area.Right - size.Width - 12, area.Bottom - size.Height - 12, size.Width, size.Height);
         Invalidate();
     }
 
+    int GuiHeight => HeaderHeight + Math.Max(1, _views().Count) * RowHeight + 6 + FooterHeight;
     int ListTop => HeaderHeight;
-    int ListBottom => ClientSize.Height / _scale - FooterHeight;
+    int ListBottom => GuiHeight - FooterHeight;
     int RowLeft => (Width0 - RowWidth) / 2;
+    int RowTop(int i) => ListTop + 4 + i * RowHeight;
     Rectangle RefreshButton => new(Width0 / 2 - ButtonWidth - 2, ListBottom + 5, ButtonWidth, ButtonHeight);
     Rectangle DoneButton => new(Width0 / 2 + 2, ListBottom + 5, ButtonWidth, ButtonHeight);
-    Point GuiMouse => new(_mouse.X < 0 ? -1 : _mouse.X / _scale, _mouse.Y < 0 ? -1 : _mouse.Y / _scale);
+    Point GuiMouse => _mouse.X < 0 ? new Point(-1, -1) : new Point(_mouse.X / _scale, _mouse.Y / _scale);
+
+    int RowAt(Point p)
+    {
+        if (p.X < RowLeft - 2 || p.X >= RowLeft + RowWidth + 2) return -1;
+        int count = _views().Count;
+        for (int i = 0; i < count; i++)
+            if (p.Y >= RowTop(i) - 2 && p.Y < RowTop(i) - 2 + RowHeight) return i;
+        return -1;
+    }
 
     protected override void OnMouseMove(MouseEventArgs e)
     {
@@ -110,12 +124,17 @@ sealed class ServerListForm : Form
         Invalidate();
     }
 
-    protected override async void OnMouseClick(MouseEventArgs e)
+    protected override async void OnMouseDown(MouseEventArgs e)
     {
         if (e.Button != MouseButtons.Left) return;
         var p = GuiMouse;
-        if (DoneButton.Contains(p)) HidePopup();
-        else if (RefreshButton.Contains(p)) await _refresh();
+        if (RefreshButton.Contains(p)) await _refresh();
+        else if (DoneButton.Contains(p)) HidePopup();
+    }
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        if (e.KeyCode == Keys.Escape) HidePopup();
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -127,7 +146,7 @@ sealed class ServerListForm : Form
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.SingleBitPerPixelGridFit;
         g.ScaleTransform(_scale, _scale);
 
-        int height = ClientSize.Height / _scale;
+        int height = GuiHeight;
         var font = _assets.Font;
         var mouse = GuiMouse;
         var views = _views();
@@ -136,10 +155,12 @@ sealed class ServerListForm : Form
         // The game's menu textures are translucent black overlays meant for the world behind the
         // screen; a neutral grey base gives the same two-tone header/list look.
         Fill(g, new Rectangle(0, 0, Width0, height), 0x404040);
-        Tile(g, "gui/menu_background.png", new Rectangle(0, 0, Width0, height), Color.FromArgb(40, 40, 40));
-        Tile(g, "gui/menu_list_background.png", new Rectangle(0, ListTop, Width0, ListBottom - ListTop), Color.FromArgb(20, 20, 20));
-        Tile(g, "gui/header_separator.png", new Rectangle(0, ListTop - 2, Width0, 2), Color.FromArgb(100, 100, 100));
-        Tile(g, "gui/footer_separator.png", new Rectangle(0, ListBottom, Width0, 2), Color.FromArgb(100, 100, 100));
+        if (_assets.Sprite("gui/menu_background.png") is { } menu)
+            TileImage(g, menu.Image, new Rectangle(0, 0, Width0, height), 32, 32, _clamp);
+        if (_assets.Sprite("gui/menu_list_background.png") is { } list)
+            TileImage(g, list.Image, new Rectangle(0, ListTop, Width0, ListBottom - ListTop), 32, 32, _clamp);
+        Tile(g, "gui/header_separator.png", new Rectangle(0, ListTop - 2, Width0, 2));
+        Tile(g, "gui/footer_separator.png", new Rectangle(0, ListBottom, Width0, 2));
 
         string title = "Play Multiplayer";
         font.Draw(g, title, McStyle.White, (Width0 - font.Width(title)) / 2, 8);
@@ -150,14 +171,15 @@ sealed class ServerListForm : Form
             font.Draw(g, none, McStyle.Gray, (Width0 - font.Width(none)) / 2, ListTop + 14);
         }
 
+        int hoveredRow = RowAt(mouse);
         for (int i = 0; i < views.Count; i++)
         {
-            int top = ListTop + 2 + i * RowHeight;
-            var row = new Rectangle(RowLeft - 2, top - 2, RowWidth + 4, RowHeight);
-            if (row.Contains(mouse))
+            int top = RowTop(i);
+            if (hoveredRow == i)
             {
-                Fill(g, row, 0x808080);
-                Fill(g, Rectangle.Inflate(row, -1, -1), 0x000000);
+                var box = new Rectangle(RowLeft - 2, top - 2, RowWidth + 4, RowHeight);
+                Fill(g, box, 0x808080);
+                Fill(g, Rectangle.Inflate(box, -1, -1), 0x000000);
             }
             tooltip = DrawEntry(g, views[i], RowLeft, top, mouse) ?? tooltip;
         }
@@ -175,8 +197,9 @@ sealed class ServerListForm : Form
         var status = view.Status;
         List<StyledChar>? tooltip = null;
 
-        var icon = view.Icon ?? _assets.Texture("misc/unknown_server.png");
-        if (icon != null) Blit(g, icon, new RectangleF(x, y, 32, 32), new RectangleF(0, 0, icon.Width, icon.Height));
+        var iconRect = new RectangleF(x, y, 32, 32);
+        if (view.Icon is { } icon) Blit(g, icon, iconRect);
+        else if (_assets.Sprite("misc/unknown_server.png") is { } unknown) Blit(g, unknown.Image, iconRect);
 
         font.Draw(g, view.Entry.Name, McStyle.White, x + 35, y + 1);
 
@@ -204,10 +227,11 @@ sealed class ServerListForm : Form
             int bars = ms < 150 ? 5 : ms < 300 ? 4 : ms < 600 ? 3 : ms < 1000 ? 2 : 1;
             sprite = $"gui/sprites/server_list/ping_{bars}.png";
         }
-        if (_assets.Texture(sprite) is { } ping) Blit(g, ping, new RectangleF(pingX, y, 10, 8), new RectangleF(0, 0, ping.Width, ping.Height));
-        else Fill(g, new Rectangle(pingX, y, 10, 8), status?.Online == true ? 0x55FF55 : 0xAA0000);
+        var pingRect = new Rectangle(pingX, y, 10, 8);
+        if (_assets.Sprite(sprite) is { } ping) Blit(g, ping.Image, pingRect);
+        else Fill(g, pingRect, status?.Online == true ? 0x55FF55 : 0xAA0000);
 
-        if (new Rectangle(pingX, y, 10, 8).Contains(mouse))
+        if (pingRect.Contains(mouse))
         {
             tooltip = status switch
             {
@@ -251,8 +275,8 @@ sealed class ServerListForm : Form
     void DrawButton(Graphics g, Rectangle r, string label, Point mouse)
     {
         bool hover = r.Contains(mouse);
-        var tex = _assets.Texture(hover ? "gui/sprites/widget/button_highlighted.png" : "gui/sprites/widget/button.png");
-        if (tex != null) NineSlice(g, tex, 3, r);
+        if (_assets.Sprite(hover ? "gui/sprites/widget/button_highlighted.png" : "gui/sprites/widget/button.png") is { } tex)
+            DrawSprite(g, tex, r);
         else
         {
             Fill(g, r, hover ? 0xFFFFFF : 0x000000);
@@ -274,13 +298,13 @@ sealed class ServerListForm : Form
         y = Math.Clamp(y, 4, Math.Max(4, height - h - 4));
 
         var box = new RectangleF(x - 3, y - 3, w + 6, h + 6);
-        var bg = _assets.Texture("gui/sprites/tooltip/background.png");
-        var frame = _assets.Texture("gui/sprites/tooltip/frame.png");
+        var bg = _assets.Sprite("gui/sprites/tooltip/background.png");
+        var frame = _assets.Sprite("gui/sprites/tooltip/frame.png");
         if (bg != null && frame != null)
         {
             var outer = RectangleF.Inflate(box, 9, 9);
-            NineSlice(g, bg, 9, outer);
-            NineSlice(g, frame, 10, outer);
+            DrawSprite(g, bg, outer);
+            DrawSprite(g, frame, outer);
         }
         else
         {
@@ -292,39 +316,72 @@ sealed class ServerListForm : Form
             font.Draw(g, lines[i], x, y + i * 10 + (i > 0 ? 2 : 0));
     }
 
-    void Tile(Graphics g, string texture, Rectangle area, Color fallback)
+    void Tile(Graphics g, string texture, Rectangle area)
     {
-        var tex = _assets.Texture(texture);
-        if (tex == null)
-        {
-            using var b = new SolidBrush(fallback);
-            g.FillRectangle(b, area);
-            return;
-        }
-        // The game maps 16 texels onto 32 GUI pixels for the menu backgrounds.
-        int tw = tex.Height <= 2 ? tex.Width : tex.Width * 2, th = tex.Height <= 2 ? tex.Height : tex.Height * 2;
+        if (_assets.Sprite(texture) is not { } tex) return;
+        // Separators are 32x2 GUI pixels per tile regardless of the pack's resolution.
+        TileImage(g, tex.Image, area, 32, 2, _clamp);
+    }
+
+    static void TileImage(Graphics g, Bitmap img, Rectangle area, float tileW, float tileH, ImageAttributes attrs)
+    {
         var state = g.Save();
         g.SetClip(area);
-        for (int ty = area.Top; ty < area.Bottom; ty += th)
-            for (int tx = area.Left; tx < area.Right; tx += tw)
-                Blit(g, tex, new RectangleF(tx, ty, tw, th), new RectangleF(0, 0, tex.Width, tex.Height));
+        for (float ty = area.Top; ty < area.Bottom; ty += tileH)
+            for (float tx = area.Left; tx < area.Right; tx += tileW)
+                g.DrawImage(img, [new PointF(tx, ty), new PointF(tx + tileW, ty), new PointF(tx, ty + tileH)],
+                    new RectangleF(0, 0, img.Width, img.Height), GraphicsUnit.Pixel, attrs);
         g.Restore(state);
     }
 
-    void NineSlice(Graphics g, Bitmap tex, int border, RectangleF dest)
+    /// Draws a GUI sprite into dest, honouring its nine-slice .mcmeta (tiling or stretching the inside).
+    void DrawSprite(Graphics g, Sprite sprite, RectangleF dest)
     {
-        float[] sx = [0, border, tex.Width - border, tex.Width];
-        float[] sy = [0, border, tex.Height - border, tex.Height];
-        float[] dx = [dest.Left, dest.Left + border, dest.Right - border, dest.Right];
-        float[] dy = [dest.Top, dest.Top + border, dest.Bottom - border, dest.Bottom];
-        if (dest.Height < tex.Height) { sy = [0, tex.Height / 2f, tex.Height / 2f, tex.Height]; dy = [dest.Top, dest.Top + dest.Height / 2, dest.Top + dest.Height / 2, dest.Bottom]; }
+        var img = sprite.Image;
+        if (sprite.Slice is not { } s)
+        {
+            Blit(g, img, dest);
+            return;
+        }
+
+        // Texels per GUI pixel; resource packs often ship sprites at 2x or 4x.
+        float kx = (float)img.Width / s.Width, ky = (float)img.Height / s.Height;
+        float l = Math.Min(s.Left, dest.Width / 2), r = Math.Min(s.Right, dest.Width / 2);
+        float t = Math.Min(s.Top, dest.Height / 2), b = Math.Min(s.Bottom, dest.Height / 2);
+
+        float[] gx = [0, s.Left, s.Width - s.Right, s.Width];
+        float[] gy = [0, s.Top, s.Height - s.Bottom, s.Height];
+        float[] dx = [dest.Left, dest.Left + l, dest.Right - r, dest.Right];
+        float[] dy = [dest.Top, dest.Top + t, dest.Bottom - b, dest.Bottom];
+
         for (int i = 0; i < 3; i++)
+        {
             for (int j = 0; j < 3; j++)
-                if (dx[i + 1] > dx[i] && dy[j + 1] > dy[j])
-                    Blit(g, tex,
-                        new RectangleF(dx[i], dy[j], dx[i + 1] - dx[i], dy[j + 1] - dy[j]),
-                        new RectangleF(sx[i], sy[j], sx[i + 1] - sx[i], sy[j + 1] - sy[j]));
+            {
+                var d = new RectangleF(dx[i], dy[j], dx[i + 1] - dx[i], dy[j + 1] - dy[j]);
+                var src = new RectangleF(gx[i] * kx, gy[j] * ky, (gx[i + 1] - gx[i]) * kx, (gy[j + 1] - gy[j]) * ky);
+                if (d.Width <= 0 || d.Height <= 0 || src.Width <= 0 || src.Height <= 0) continue;
+
+                bool corner = i != 1 && j != 1;
+                if (corner || s.StretchInner)
+                {
+                    Blit(g, img, d, src);
+                    continue;
+                }
+
+                // Edges and centre repeat at their native size, cut off at the end.
+                float tw = i == 1 ? gx[2] - gx[1] : d.Width, th = j == 1 ? gy[2] - gy[1] : d.Height;
+                var state = g.Save();
+                g.SetClip(d, CombineMode.Intersect);
+                for (float ty = d.Top; ty < d.Bottom; ty += th)
+                    for (float tx = d.Left; tx < d.Right; tx += tw)
+                        Blit(g, img, new RectangleF(tx, ty, tw, th), src);
+                g.Restore(state);
+            }
+        }
     }
+
+    void Blit(Graphics g, Bitmap tex, RectangleF dest) => Blit(g, tex, dest, new RectangleF(0, 0, tex.Width, tex.Height));
 
     void Blit(Graphics g, Bitmap tex, RectangleF dest, RectangleF src) =>
         g.DrawImage(tex, [dest.Location, new PointF(dest.Right, dest.Top), new PointF(dest.Left, dest.Bottom)], src, GraphicsUnit.Pixel, _clamp);
