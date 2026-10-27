@@ -2,9 +2,11 @@ using static McServerTray.McDraw;
 
 namespace McServerTray;
 
-/// Extra look for a menu item, via its Tag: a grey second line, or a group heading
-/// (grey text with a play arrow on the right, for headings that also launch something).
-sealed record MenuTag(string? Subtitle = null, bool Header = false);
+/// Extra look and behaviour for a menu item, via its Tag: a grey second line, a group heading
+/// (grey text with a play arrow on the right, for headings that also launch something), and
+/// KeepOpen for toggles/choices that update in place instead of closing the menu.
+/// ProfileId marks a profile choice (null with KeepOpen on a choice = "Automatic").
+sealed record MenuTag(string? Subtitle = null, bool Header = false, bool KeepOpen = false, bool Choice = false, string? ProfileId = null);
 
 /// Draws the tray menu like a Minecraft tooltip: the pack's tooltip background and frame,
 /// the bitmap font with its shadow, and pixel-sharp item images.

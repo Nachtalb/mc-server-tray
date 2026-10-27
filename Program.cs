@@ -74,8 +74,7 @@ sealed class TrayApp : IDisposable
     readonly Dictionary<IconCube, Bitmap?> _cubeCache = new();
     Task? _poll;
 
-    /// Tag for menu items that toggle in place instead of closing the menu.
-    static readonly object KeepOpen = new();
+    /// Set when the last clicked menu item updates in place; closing the menus is then cancelled.
     bool _keepMenuOpen;
 
     public async Task SnapshotAsync(string path, Point mouse, int selectedRow, bool menu)
@@ -130,12 +129,7 @@ sealed class TrayApp : IDisposable
             if (e.Button == MouseButtons.Left) TogglePopup();
         };
         _menu.Opening += (_, _) => BuildMenu();
-        _menu.ItemClicked += (_, e) => _keepMenuOpen = e.ClickedItem?.Tag == KeepOpen;
-        _menu.Closing += (_, e) =>
-        {
-            if (e.CloseReason == ToolStripDropDownCloseReason.ItemClicked && _keepMenuOpen) e.Cancel = true;
-            _keepMenuOpen = false;
-        };
+        HookKeepOpen(_menu);
 
         _timer.Interval = (int)PollInterval.TotalMilliseconds;
         _timer.Tick += async (_, _) => await PollAsync();
@@ -483,8 +477,8 @@ sealed class TrayApp : IDisposable
         _menu.Items.Add("Show servers", null, (_, _) => TogglePopup());
         _menu.Items.Add(BuildProfileMenu());
 
-        // A toggle: flips in place and keeps the menu open (see the Closing handler).
-        var startup = new ToolStripMenuItem("Start with Windows") { Checked = IsStartupEnabled(), Tag = KeepOpen };
+        // A toggle: flips in place and keeps the menu open.
+        var startup = new ToolStripMenuItem("Start with Windows") { Checked = IsStartupEnabled(), Tag = new MenuTag(KeepOpen: true) };
         startup.Click += (_, _) =>
         {
             SetStartup(!startup.Checked);
@@ -497,6 +491,17 @@ sealed class TrayApp : IDisposable
 
         _menuRenderer.Apply(_menu);
         HookClickSound(_menu);
+    }
+
+    /// Clicking an item normally closes its menu and every menu above it. For items tagged KeepOpen
+    /// both the submenu and the main menu cancel that, so the choice updates in place.
+    void HookKeepOpen(ToolStripDropDown menu)
+    {
+        menu.ItemClicked += (_, e) => _keepMenuOpen = e.ClickedItem?.Tag is MenuTag { KeepOpen: true };
+        menu.Closing += (_, e) =>
+        {
+            if (e.CloseReason == ToolStripDropDownCloseReason.ItemClicked && _keepMenuOpen) e.Cancel = true;
+        };
     }
 
     /// Menu entries click like the game's buttons.
@@ -521,7 +526,7 @@ sealed class TrayApp : IDisposable
         menu.DropDownItems.Add(new ToolStripMenuItem("Automatic", null, (_, _) => SetDefaultProfile(null))
         {
             Checked = chosen == null,
-            Tag = new MenuTag(Subtitle: $"Last played: {lastPlayed}"),
+            Tag = new MenuTag(Subtitle: $"Last played: {lastPlayed}", KeepOpen: true, Choice: true),
         });
 
         foreach (var group in profiles.GroupBy(p => p.Launcher))
@@ -539,8 +544,10 @@ sealed class TrayApp : IDisposable
                 {
                     Checked = profile.Id == chosen,
                     ToolTipText = profile.GameDir,
+                    Tag = new MenuTag(KeepOpen: true, Choice: true, ProfileId: profile.Id),
                 });
         }
+        HookKeepOpen(menu.DropDown);
         return menu;
     }
 
@@ -551,6 +558,29 @@ sealed class TrayApp : IDisposable
         _servers = LoadServers(_profile is { } p ? [p] : []);
         if (_popup.Visible) _popup.Relayout();
         _ = PollAsync();
+        RefreshOpenMenu(id);
+    }
+
+    /// The menus stay open after picking a profile: move the check and update "Launch Game" in place.
+    void RefreshOpenMenu(string? chosen)
+    {
+        foreach (var item in _menu.Items.OfType<ToolStripMenuItem>())
+        {
+            if (item.Text == "Launch Game" && _profile != null)
+            {
+                item.Image = ProfileImage(_profile);
+                item.Tag = new MenuTag(Subtitle: _profile.Name);
+            }
+            if (!item.HasDropDownItems) continue;
+            foreach (var choice in item.DropDownItems.OfType<ToolStripMenuItem>())
+                if (choice.Tag is MenuTag { Choice: true } tag)
+                    choice.Checked = tag.ProfileId == chosen;
+        }
+        // Widths may change with the new subtitle; re-measure and repaint.
+        _menuRenderer.Apply(_menu);
+        _menu.Invalidate(true);
+        foreach (var item in _menu.Items.OfType<ToolStripMenuItem>().Where(i => i.HasDropDownItems))
+            item.DropDown.Invalidate(true);
     }
 
     static bool IsStartupEnabled()
