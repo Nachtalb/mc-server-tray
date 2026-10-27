@@ -81,7 +81,7 @@ sealed class TrayApp : IDisposable
     {
         (_profile, _assets) = LoadLook();
         (_iconIdle, _iconActive) = MakeTrayIcons(_assets.Sprite("block/grass_block_side.png")?.Image);
-        _servers = LoadServers(McProfile.Discover());
+        _servers = LoadServers(_profile is { } p ? [p] : []);
 
         _popup = new ServerListForm(_assets, Views, PollAsync, Join);
         // ShowPopup marshals onto the popup, which needs a handle even while it's hidden.
@@ -242,7 +242,8 @@ sealed class TrayApp : IDisposable
     async Task PollOnceAsync()
     {
         ReloadLookIfChanged();
-        var servers = LoadServers(McProfile.Discover());
+        // Like the game, each profile has its own server list; we watch the default one's.
+        var servers = LoadServers(_profile is { } p ? [p] : []);
         bool listChanged = !servers.Select(s => s.Address).SequenceEqual(_servers.Select(s => s.Address));
         _servers = servers;
         if (listChanged && _popup.Visible) _popup.Relayout();
