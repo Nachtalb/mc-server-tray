@@ -168,12 +168,6 @@ sealed class McMenuRenderer(Func<McAssets> assets) : ToolStripRenderer
         var state = g.Save();
         PixelArt(g, s);
         var r = new RectangleF(Edges(e.Item, s).left + IconX, (e.Item.Height / s - ImageSize) / 2f, ImageSize, ImageSize);
-        if (e.Item is ToolStripMenuItem { Checked: true })
-        {
-            // Selected profile: a white frame around its icon, like a selected list entry.
-            Fill(g, Rectangle.Round(RectangleF.Inflate(r, 1, 1)), 0xFFFFFF);
-            Fill(g, Rectangle.Round(r), 0x000000);
-        }
         if (img.Width > ImageSize * s)
         {
             // Rendered cubes and launcher icons are bigger than the slot: shrink smoothly, not pixel-dropping.
@@ -187,7 +181,7 @@ sealed class McMenuRenderer(Func<McAssets> assets) : ToolStripRenderer
 
     protected override void OnRenderItemCheck(ToolStripItemImageRenderEventArgs e)
     {
-        // Items with an image show the check as a frame (above); plain ones get a check mark.
+        // Items with an image show being checked by their yellow text only; plain ones get a check mark.
         if (e.Item.Image != null) return;
         int s = Scale(e.ToolStrip!);
         var g = e.Graphics;
