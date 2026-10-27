@@ -24,6 +24,7 @@ sealed class ServerListForm : Form
     readonly System.Windows.Forms.Timer _anim = new() { Interval = 100 };
     readonly ImageAttributes _clamp = new();
     McAssets _assets;
+    McSound _click;
     int _scale = 2;
     Point _mouse = new(-1, -1);
     long _hiddenAt;
@@ -31,6 +32,7 @@ sealed class ServerListForm : Form
     public ServerListForm(McAssets assets, Func<IReadOnlyList<ServerView>> views, Func<Task> refresh)
     {
         _assets = assets;
+        _click = new McSound(assets.Sound("random/click"), 0.25f);
         _views = views;
         _refresh = refresh;
         _clamp.SetWrapMode(WrapMode.TileFlipXY);
@@ -51,6 +53,8 @@ sealed class ServerListForm : Form
     public void SetAssets(McAssets assets)
     {
         _assets = assets;
+        _click.Dispose();
+        _click = new McSound(assets.Sound("random/click"), 0.25f);
         Invalidate();
     }
 
@@ -141,8 +145,16 @@ sealed class ServerListForm : Form
     {
         if (e.Button != MouseButtons.Left) return;
         var p = GuiMouse;
-        if (RefreshButton.Contains(p)) await _refresh();
-        else if (DoneButton.Contains(p)) HidePopup();
+        if (RefreshButton.Contains(p))
+        {
+            _click.Play();
+            await _refresh();
+        }
+        else if (DoneButton.Contains(p))
+        {
+            _click.Play();
+            HidePopup();
+        }
     }
 
     protected override void OnKeyDown(KeyEventArgs e)
@@ -436,6 +448,7 @@ sealed class ServerListForm : Form
         {
             _anim.Dispose();
             _clamp.Dispose();
+            _click.Dispose();
         }
         base.Dispose(disposing);
     }
