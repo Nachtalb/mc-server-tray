@@ -30,6 +30,10 @@ sealed class ServerListForm : Form
     Point _mouse = new(-1, -1);
     string? _selected;
     long _hiddenAt;
+    int _visibleRows = 1;
+    int _scroll;
+    bool _dragging;
+    int _dragStartY, _dragStartScroll;
 
     public ServerListForm(McAssets assets, Func<IReadOnlyList<ServerView>> views, Func<Task> refresh, Action<ServerView> join)
     {
@@ -108,17 +112,48 @@ sealed class ServerListForm : Form
     {
         var screen = Screen.FromPoint(Cursor.Position);
         _scale = Math.Max(1, (int)Math.Round(DeviceDpi / 96.0 * 2));
-        var size = new Size(Width0 * _scale, GuiHeight * _scale);
         var area = screen.WorkingArea;
+        // As many rows as fit on screen; the rest scroll.
+        int fit = (area.Height / _scale - 24 - HeaderHeight - 6 - FooterHeight) / RowHeight;
+        _visibleRows = Math.Clamp(_views().Count, 1, Math.Max(1, fit));
+        _scroll = Math.Clamp(_scroll, 0, MaxScroll);
+        var size = new Size(Width0 * _scale, GuiHeight * _scale);
         Bounds = new Rectangle(area.Right - size.Width - 12, area.Bottom - size.Height - 12, size.Width, size.Height);
         Invalidate();
     }
 
-    int GuiHeight => HeaderHeight + Math.Max(1, _views().Count) * RowHeight + 6 + FooterHeight;
+    int GuiHeight => HeaderHeight + _visibleRows * RowHeight + 6 + FooterHeight;
     int ListTop => HeaderHeight;
     int ListBottom => GuiHeight - FooterHeight;
-    int RowLeft => (Width0 - RowWidth) / 2;
-    int RowTop(int i) => ListTop + 4 + i * RowHeight;
+    int MaxScroll => Math.Max(0, (_views().Count - _visibleRows) * RowHeight);
+    // Rows move left to make room for the scrollbar, like the game's lists.
+    int RowLeft => MaxScroll > 0 ? 4 : (Width0 - RowWidth) / 2;
+    int RowTop(int i) => ListTop + 4 + i * RowHeight - _scroll;
+    Rectangle ScrollTrack => new(Width0 - 8, ListTop, 6, ListBottom - ListTop);
+
+    Rectangle ScrollThumb
+    {
+        get
+        {
+            var track = ScrollTrack;
+            int h = Math.Clamp(track.Height * track.Height / (track.Height + MaxScroll), 32, track.Height);
+            int y = MaxScroll == 0 ? track.Y : track.Y + _scroll * (track.Height - h) / MaxScroll;
+            return new Rectangle(track.X, y, track.Width, h);
+        }
+    }
+
+    void ScrollTo(int scroll)
+    {
+        _scroll = Math.Clamp(scroll, 0, MaxScroll);
+        Invalidate();
+    }
+
+    void EnsureVisible(int row)
+    {
+        int top = row * RowHeight, bottom = top + RowHeight;
+        if (top < _scroll) ScrollTo(top);
+        else if (bottom > _scroll + _visibleRows * RowHeight) ScrollTo(bottom - _visibleRows * RowHeight);
+    }
     int ButtonsLeft => (Width0 - 3 * ButtonWidth - 8) / 2;
     Rectangle JoinButton => new(ButtonsLeft, ListBottom + 5, ButtonWidth, ButtonHeight);
     Rectangle RefreshButton => new(ButtonsLeft + ButtonWidth + 4, ListBottom + 5, ButtonWidth, ButtonHeight);
@@ -129,7 +164,7 @@ sealed class ServerListForm : Form
 
     int RowAt(Point p)
     {
-        if (p.X < RowLeft - 2 || p.X >= RowLeft + RowWidth + 2) return -1;
+        if (p.X < RowLeft - 2 || p.X >= RowLeft + RowWidth + 2 || p.Y < ListTop || p.Y >= ListBottom) return -1;
         int count = _views().Count;
         for (int i = 0; i < count; i++)
             if (p.Y >= RowTop(i) - 2 && p.Y < RowTop(i) - 2 + RowHeight) return i;
@@ -148,8 +183,18 @@ sealed class ServerListForm : Form
     protected override void OnMouseMove(MouseEventArgs e)
     {
         _mouse = e.Location;
+        if (_dragging)
+        {
+            var track = ScrollTrack;
+            int range = Math.Max(1, track.Height - ScrollThumb.Height);
+            ScrollTo(_dragStartScroll + (GuiMouse.Y - _dragStartY) * MaxScroll / range);
+        }
         Invalidate();
     }
+
+    protected override void OnMouseUp(MouseEventArgs e) => _dragging = false;
+
+    protected override void OnMouseWheel(MouseEventArgs e) => ScrollTo(_scroll - e.Delta / 120 * (RowHeight / 2));
 
     protected override void OnMouseLeave(EventArgs e)
     {
@@ -162,6 +207,18 @@ sealed class ServerListForm : Form
         if (e.Button != MouseButtons.Left) return;
         var p = GuiMouse;
         var views = _views();
+
+        if (MaxScroll > 0 && ScrollTrack.Contains(p))
+        {
+            // Clicking the track jumps the thumb there; either way, start dragging it.
+            var thumb = ScrollThumb;
+            if (!thumb.Contains(p))
+                ScrollTo((p.Y - ScrollTrack.Y - thumb.Height / 2) * MaxScroll / Math.Max(1, ScrollTrack.Height - thumb.Height));
+            _dragging = true;
+            _dragStartY = p.Y;
+            _dragStartScroll = _scroll;
+            return;
+        }
 
         int row = RowAt(p);
         if (row >= 0)
@@ -215,9 +272,11 @@ sealed class ServerListForm : Form
                 break;
             case Keys.Up when views.Count > 0:
                 _selected = views[Math.Max(0, current - 1)].Entry.Address;
+                EnsureVisible(Math.Max(0, current - 1));
                 break;
             case Keys.Down when views.Count > 0:
                 _selected = views[Math.Min(views.Count - 1, current + 1)].Entry.Address;
+                EnsureVisible(Math.Min(views.Count - 1, current + 1));
                 break;
             case Keys.Enter when Selected is { } sel:
                 Join(sel);
@@ -262,10 +321,13 @@ sealed class ServerListForm : Form
             font.Draw(g, none, McStyle.Gray, (Width0 - font.Width(none)) / 2, ListTop + 14);
         }
 
-        int hoveredRow = RowAt(mouse);
+        int hoveredRow = _dragging ? -1 : RowAt(mouse);
+        var listState = g.Save();
+        g.SetClip(new Rectangle(0, ListTop, Width0, ListBottom - ListTop));
         for (int i = 0; i < views.Count; i++)
         {
             int top = RowTop(i);
+            if (top + RowHeight < ListTop || top - 2 > ListBottom) continue;
             bool selected = views[i].Entry.Address == _selected;
             if (selected)
             {
@@ -274,6 +336,15 @@ sealed class ServerListForm : Form
                 Fill(g, Rectangle.Inflate(box, -1, -1), 0x000000);
             }
             tooltip = DrawEntry(g, views[i], RowLeft, top, mouse, hoveredRow == i || selected) ?? tooltip;
+        }
+        g.Restore(listState);
+
+        if (MaxScroll > 0)
+        {
+            if (_assets.Sprite("gui/sprites/widget/scroller_background.png") is { } track) DrawSprite(g, track, ScrollTrack);
+            else Fill(g, ScrollTrack, 0x000000);
+            if (_assets.Sprite("gui/sprites/widget/scroller.png") is { } thumb) DrawSprite(g, thumb, ScrollThumb);
+            else Fill(g, ScrollThumb, 0x808080);
         }
 
         DrawButton(g, JoinButton, "Join Server", mouse, enabled: Selected is { Status: not null });
