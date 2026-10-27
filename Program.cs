@@ -336,36 +336,57 @@ sealed class TrayApp : IDisposable
 
         var results = await Task.WhenAll(_servers.Select(s => ServerPing.QueryAsync(s.Address, PingTimeout)));
 
-        var joined = new List<string>();
+        var joins = new List<PlayerJoin>();
         for (int i = 0; i < _servers.Count; i++)
         {
             var server = _servers[i];
             var now = results[i];
             _status.TryGetValue(server.Address, out var before);
-            joined.AddRange(DescribeJoins(server, before, now));
+            if (DescribeJoin(server, before, now) is { } join) joins.Add(join);
             _status[server.Address] = now;
         }
 
-        if (joined.Count > 0)
-            _tray.ShowBalloonTip(5000, "Someone's online", string.Join("\n", joined), ToolTipIcon.None);
+        if (joins.Count > 0)
+        {
+            var (title, body) = JoinNotification(joins);
+            _tray.ShowBalloonTip(5000, title, body, ToolTipIcon.None);
+        }
 
         UpdateTray();
         _popup.Invalidate();
     }
 
-    static IEnumerable<string> DescribeJoins(ServerEntry server, ServerStatus? before, ServerStatus now)
+    /// New players on a server since the last poll; Names is empty when the server hides its list.
+    record PlayerJoin(string Server, List<string> Names, int Online);
+
+    static PlayerJoin? DescribeJoin(ServerEntry server, ServerStatus? before, ServerStatus now)
     {
-        if (!now.Online || now.PlayersOnline == 0) yield break;
+        if (!now.Online || now.PlayersOnline == 0) return null;
 
         int prevCount = before is { Online: true } ? before.PlayersOnline : 0;
         var prevNames = before is { Online: true } ? before.PlayerNames.ToHashSet() : [];
         var newNames = now.PlayerNames.Where(n => !prevNames.Contains(n)).ToList();
 
-        if (newNames.Count > 0)
-            yield return $"{string.Join(", ", newNames)} joined {server.Name}";
-        else if (now.PlayersOnline > prevCount)
-            // Server hides its player list; all we can report is the count.
-            yield return $"{server.Name}: {now.PlayersOnline} player(s) online";
+        if (newNames.Count > 0) return new PlayerJoin(server.Name, newNames, now.PlayersOnline);
+        // Server hides its player list; all we can report is the count.
+        if (now.PlayersOnline > prevCount) return new PlayerJoin(server.Name, [], now.PlayersOnline);
+        return null;
+    }
+
+    /// "Steve is online" / "Steve and Alex are online" when we know who; "Someone's online" only when we don't.
+    static (string title, string body) JoinNotification(List<PlayerJoin> joins)
+    {
+        var names = joins.SelectMany(j => j.Names).Distinct().ToList();
+        string title = names.Count switch
+        {
+            0 => "Someone's online",
+            1 => $"{names[0]} is online",
+            _ => $"{string.Join(", ", names[..^1])} and {names[^1]} are online",
+        };
+        var lines = joins.Select(j => j.Names.Count > 0
+            ? $"{string.Join(", ", j.Names)} joined {j.Server}"
+            : $"{j.Server}: {j.Online} player(s) online");
+        return (title, string.Join("\n", lines));
     }
 
     void UpdateTray()
