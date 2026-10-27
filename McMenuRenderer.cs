@@ -42,7 +42,9 @@ sealed class McMenuRenderer(Func<McAssets> assets) : ToolStripRenderer
         menu.ShowCheckMargin = false;
         menu.ShowImageMargin = true;
         menu.ImageScalingSize = new Size(ImageSize * s, ImageSize * s);
-        menu.Padding = new Padding(0, 4 * s, 0, 4 * s);
+        // The dropdown ignores its own top/bottom padding, so the first and last rows carry the
+        // space to the frame as margins instead.
+        menu.Padding = Padding.Empty;
 
         float RowWidth(ToolStripMenuItem i)
         {
@@ -54,18 +56,20 @@ sealed class McMenuRenderer(Func<McAssets> assets) : ToolStripRenderer
         int width = (int)Math.Ceiling((rows.Count == 0 ? 40 : rows.Max(RowWidth)) * s);
 
         int height = 0;
-        foreach (ToolStripItem item in menu.Items)
+        var all = menu.Items.Cast<ToolStripItem>().ToList();
+        foreach (var item in all)
         {
             item.AutoSize = false;
             int h = item is ToolStripSeparator ? 5 : Subtitle(item) != null ? SubtitledHeight : ItemHeight;
             item.Size = new Size(width, h * s);
-            height += item.Height;
+            item.Margin = new Padding(0, item == all[0] ? (Inset + 1) * s : 0, 0, item == all[^1] ? (Inset + 1) * s : 0);
+            height += item.Height + item.Margin.Vertical;
             if (item is ToolStripMenuItem { HasDropDownItems: true, DropDown: ToolStripDropDownMenu sub })
                 Apply(sub);
         }
 
         menu.AutoSize = false;
-        menu.Size = new Size(width, height + menu.Padding.Vertical);
+        menu.Size = new Size(width, height);
     }
 
     protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e)
@@ -102,10 +106,13 @@ sealed class McMenuRenderer(Func<McAssets> assets) : ToolStripRenderer
     {
         if (!e.Item.Selected || !e.Item.Enabled) return;
         int s = Scale(e.ToolStrip!);
-        // The whole row inside the frame, whatever width WinForms gave the item.
+        // The whole row, clipped to the inside of the frame on every side (WinForms may place
+        // the first and last rows closer to the edge than the padding asks for).
         var (left, right) = Edges(e.Item, s);
+        float top = Math.Max(0, Inset * s - e.Item.Bounds.Y);
+        float bottom = Math.Min(e.Item.Height, e.Item.Owner!.Height - Inset * s - e.Item.Bounds.Y);
         using var hover = new SolidBrush(Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF));
-        e.Graphics.FillRectangle(hover, RectangleF.FromLTRB((left + Inset) * s, 0, (right - Inset) * s, e.Item.Height));
+        e.Graphics.FillRectangle(hover, RectangleF.FromLTRB((left + Inset) * s, top, (right - Inset) * s, bottom));
     }
 
     protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)

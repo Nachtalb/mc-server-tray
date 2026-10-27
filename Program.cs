@@ -81,7 +81,9 @@ sealed class TrayApp : IDisposable
             _menu.Show(-10000, -10000);
             var profiles = _menu.Items.OfType<ToolStripMenuItem>().First(i => i.HasDropDownItems);
             profiles.ShowDropDown();
-            profiles.DropDown.Items.OfType<ToolStripMenuItem>().FirstOrDefault(i => i.Tag is MenuTag { Header: true })?.Select();
+            // --select N highlights the Nth submenu row (default: the first launcher heading).
+            var rows = profiles.DropDown.Items.OfType<ToolStripMenuItem>().ToList();
+            (selectedRow >= 0 && selectedRow < rows.Count ? rows[selectedRow] : rows.FirstOrDefault(i => i.Tag is MenuTag { Header: true }))?.Select();
             Application.DoEvents();
             var sub = profiles.DropDown;
             using var shot = new Bitmap(_menu.Width + sub.Width + 8, Math.Max(_menu.Height, sub.Height));
