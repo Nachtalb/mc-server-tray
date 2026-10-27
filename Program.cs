@@ -104,18 +104,22 @@ sealed class TrayApp : IDisposable
         _ = PollAsync();
     }
 
-    /// Textures come from the profile played last: its game version and enabled resource packs.
+    /// The profile picked in the tray menu, or the one played last when set to automatic.
+    static McProfile? DefaultProfile(List<McProfile> profiles) =>
+        profiles.FirstOrDefault(p => p.Id == Settings.Load().DefaultProfile) ?? profiles.MaxBy(p => p.LastLaunch);
+
+    /// Textures come from the default profile: its game version and enabled resource packs.
     (McProfile? profile, McAssets assets) LoadLook()
     {
-        var profile = McProfile.Discover().MaxBy(p => p.LastLaunch);
+        var profile = DefaultProfile(McProfile.Discover());
         _lookSignature = profile?.Signature();
         return (profile, McAssets.Load(profile));
     }
 
-    /// Picks up resource pack changes (or a different instance being played) without a restart.
+    /// Picks up resource pack changes (or a different default profile) without a restart.
     void ReloadLookIfChanged()
     {
-        var latest = McProfile.Discover().MaxBy(p => p.LastLaunch);
+        var latest = DefaultProfile(McProfile.Discover());
         if (latest?.Signature() == _lookSignature) return;
 
         var old = _assets;
@@ -302,6 +306,7 @@ sealed class TrayApp : IDisposable
         _menu.Items.Clear();
         _menu.Items.Add("Show servers", null, (_, _) => TogglePopup());
         _menu.Items.Add("Refresh now", null, async (_, _) => await PollAsync());
+        _menu.Items.Add(BuildProfileMenu());
 
         var startup = new ToolStripMenuItem("Start with Windows") { Checked = IsStartupEnabled() };
         startup.Click += (_, _) => SetStartup(!startup.Checked);
@@ -309,6 +314,43 @@ sealed class TrayApp : IDisposable
 
         _menu.Items.Add(new ToolStripSeparator());
         _menu.Items.Add("Exit", null, (_, _) => Application.Exit());
+    }
+
+    /// "Profile" submenu: automatic (last played) or a fixed profile, grouped by launcher.
+    ToolStripMenuItem BuildProfileMenu()
+    {
+        var profiles = McProfile.Discover();
+        string? chosen = Settings.Load().DefaultProfile;
+        if (chosen != null && profiles.All(p => p.Id != chosen)) chosen = null;
+
+        var menu = new ToolStripMenuItem("Profile");
+        string lastPlayed = profiles.MaxBy(p => p.LastLaunch)?.Name ?? "none found";
+        menu.DropDownItems.Add(new ToolStripMenuItem($"Automatic (last played: {lastPlayed})", null, (_, _) => SetDefaultProfile(null))
+        {
+            Checked = chosen == null,
+        });
+
+        foreach (var group in profiles.GroupBy(p => p.Launcher))
+        {
+            menu.DropDownItems.Add(new ToolStripSeparator());
+            menu.DropDownItems.Add(new ToolStripMenuItem(group.Key) { Enabled = false });
+            foreach (var profile in group.OrderByDescending(p => p.LastLaunch))
+                menu.DropDownItems.Add(new ToolStripMenuItem(profile.Name, null, (_, _) => SetDefaultProfile(profile.Id))
+                {
+                    Checked = profile.Id == chosen,
+                    ToolTipText = profile.GameDir,
+                });
+        }
+        return menu;
+    }
+
+    void SetDefaultProfile(string? id)
+    {
+        (Settings.Load() with { DefaultProfile = id }).Save();
+        ReloadLookIfChanged();
+        _servers = LoadServers(_profile is { } p ? [p] : []);
+        if (_popup.Visible) _popup.Relayout();
+        _ = PollAsync();
     }
 
     static bool IsStartupEnabled()
