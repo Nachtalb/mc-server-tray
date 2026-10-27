@@ -76,7 +76,8 @@ sealed class TrayApp : IDisposable
         _servers = LoadServers(prismRoot);
 
         _popup = new ServerListForm(_assets, Views, PollAsync);
-        _popup.CreateControl();
+        // ShowPopup marshals onto the popup, which needs a handle even while it's hidden.
+        _ = _popup.Handle;
 
         _tray.Icon = _iconIdle;
         _tray.Text = "Minecraft servers";
