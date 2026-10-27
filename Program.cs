@@ -94,7 +94,7 @@ sealed class TrayApp : IDisposable
             Application.DoEvents();
             var sub = profiles.DropDown;
             using var shot = new Bitmap(_menu.Width + sub.Width + 8, Math.Max(_menu.Height, sub.Height));
-            using (var g = Graphics.FromImage(shot)) g.Clear(Color.FromArgb(32, 32, 32));
+            using (var g = Graphics.FromImage(shot)) g.Clear(Color.Transparent);
             _menu.DrawToBitmap(shot, new Rectangle(0, 0, _menu.Width, _menu.Height));
             sub.DrawToBitmap(shot, new Rectangle(_menu.Width + 8, 0, sub.Width, sub.Height));
             shot.Save(path, ImageFormat.Png);
