@@ -33,6 +33,12 @@ OutputBaseFilename={#AppName}-{#AppVersion}-setup
 SetupIconFile=..\app.ico
 UninstallDisplayIcon={app}\{#AppExe}
 WizardStyle=modern
+; Own artwork from tools/make-installer-art.ps1, at 100/150/200% DPI.
+WizardImageFile=wizard-100.bmp,wizard-150.bmp,wizard-200.bmp
+WizardSmallImageFile=wizard-small-100.bmp,wizard-small-150.bmp,wizard-small-200.bmp
+WizardImageStretch=no
+; $BBGGRR: the darkest dirt shade, should the panel be taller than the image.
+WizardImageBackColor=$111924
 Compression=lzma2/max
 SolidCompression=yes
 ; The app holds this mutex while running; setup and uninstall ask to close it first.
