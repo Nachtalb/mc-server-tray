@@ -1,5 +1,6 @@
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using System.Runtime.InteropServices;
 
 namespace McServerTray;
 
@@ -16,6 +17,7 @@ sealed class ServerListForm : Form
     const int FooterHeight = 30;
     const int ButtonWidth = 98;
     const int ButtonHeight = 20;
+    const int Frame = 1;
 
     readonly Func<IReadOnlyList<ServerView>> _views;
     readonly Func<Task> _refresh;
@@ -61,6 +63,17 @@ sealed class ServerListForm : Form
             return cp;
         }
     }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        // Windows 11: small rounded corners and the system shadow, like other flyouts.
+        int round = 3; // DWMWCP_ROUNDSMALL
+        DwmSetWindowAttribute(Handle, 33, ref round, sizeof(int));
+    }
+
+    [DllImport("dwmapi.dll")]
+    static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
 
     public void Toggle()
     {
@@ -152,13 +165,9 @@ sealed class ServerListForm : Form
         var views = _views();
         List<StyledChar>? tooltip = null;
 
-        // The game's menu textures are translucent black overlays meant for the world behind the
-        // screen; a neutral grey base gives the same two-tone header/list look.
-        Fill(g, new Rectangle(0, 0, Width0, height), 0x404040);
-        if (_assets.Sprite("gui/menu_background.png") is { } menu)
-            TileImage(g, menu.Image, new Rectangle(0, 0, Width0, height), 32, 32, _clamp);
-        if (_assets.Sprite("gui/menu_list_background.png") is { } list)
-            TileImage(g, list.Image, new Rectangle(0, ListTop, Width0, ListBottom - ListTop), 32, 32, _clamp);
+        // Classic dirt: header and footer at 25% brightness, the list behind it darker.
+        Dirt(g, new Rectangle(0, 0, Width0, height), 0.25f);
+        Dirt(g, new Rectangle(0, ListTop, Width0, ListBottom - ListTop), 0.125f);
         Tile(g, "gui/header_separator.png", new Rectangle(0, ListTop - 2, Width0, 2));
         Tile(g, "gui/footer_separator.png", new Rectangle(0, ListBottom, Width0, 2));
 
@@ -186,6 +195,12 @@ sealed class ServerListForm : Form
 
         DrawButton(g, RefreshButton, "Refresh", mouse);
         DrawButton(g, DoneButton, "Done", mouse);
+
+        // A thin frame so the popup sits on the desktop like a window rather than a loose rectangle.
+        Fill(g, new Rectangle(0, 0, Width0, Frame), 0x000000);
+        Fill(g, new Rectangle(0, height - Frame, Width0, Frame), 0x000000);
+        Fill(g, new Rectangle(0, 0, Frame, height), 0x000000);
+        Fill(g, new Rectangle(Width0 - Frame, 0, Frame, height), 0x000000);
 
         if (tooltip != null) DrawTooltip(g, tooltip, mouse, height);
     }
@@ -314,6 +329,29 @@ sealed class ServerListForm : Form
 
         for (int i = 0; i < lines.Count; i++)
             font.Draw(g, lines[i], x, y + i * 10 + (i > 0 ? 2 : 0));
+    }
+
+    /// The dirt block tiled at 32 GUI pixels per block (2 per texel at 16x), darkened like the old menus.
+    void Dirt(Graphics g, Rectangle area, float brightness)
+    {
+        var dirt = _assets.Sprite("block/dirt.png");
+        if (dirt == null)
+        {
+            int v = (int)(brightness * 0x80);
+            Fill(g, area, v << 16 | v << 8 | v);
+            return;
+        }
+        using var attrs = new ImageAttributes();
+        attrs.SetWrapMode(WrapMode.TileFlipXY);
+        attrs.SetColorMatrix(new ColorMatrix(
+        [
+            [brightness, 0, 0, 0, 0],
+            [0, brightness, 0, 0, 0],
+            [0, 0, brightness, 0, 0],
+            [0, 0, 0, 1, 0],
+            [0, 0, 0, 0, 1],
+        ]));
+        TileImage(g, dirt.Image, area, 32, 32, attrs);
     }
 
     void Tile(Graphics g, string texture, Rectangle area)
