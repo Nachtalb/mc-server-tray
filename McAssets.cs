@@ -93,10 +93,32 @@ sealed class McAssets : IDisposable
                     sources.Add(src);
             }
         }
+        int? protocol = null;
         if (profile?.ClientJar is { } jar && AssetSource.Open(jar) is { } jarSource)
+        {
             sources.Add(jarSource);
+            protocol = ReadProtocol(jarSource);
+        }
 
-        return new McAssets(sources, profile?.AssetsDir);
+        return new McAssets(sources, profile?.AssetsDir) { ClientProtocol = protocol };
+    }
+
+    /// The network protocol of the profile's game version, from version.json in the client jar.
+    /// Servers on another protocol are shown as incompatible, like in the game.
+    public int? ClientProtocol { get; private init; }
+
+    static int? ReadProtocol(AssetSource jar)
+    {
+        if (jar.Read("version.json") is not { } json) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return doc.RootElement.TryGetProperty("protocol_version", out var p) && p.TryGetInt32(out int v) ? v : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     /// Reads assets/minecraft/<path> from the highest-priority source that has it.

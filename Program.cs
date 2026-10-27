@@ -345,7 +345,7 @@ sealed class TrayApp : IDisposable
         _servers = servers;
         if (listChanged && _popup.Visible) _popup.Relayout();
 
-        var results = await Task.WhenAll(_servers.Select(s => ServerPing.QueryAsync(s.Address, PingTimeout)));
+        var results = await Task.WhenAll(_servers.Select(s => ServerPing.QueryAsync(s.Address, PingTimeout, _assets.ClientProtocol)));
 
         var joins = new List<PlayerJoin>();
         for (int i = 0; i < _servers.Count; i++)

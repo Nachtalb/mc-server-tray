@@ -15,12 +15,14 @@ record ServerStatus(
     string? DescriptionJson,
     string? FaviconBase64,
     long? PingMs,
-    string? Error);
+    string? Error,
+    int? Protocol = null);
 
 /// Minecraft Java "Server List Ping" (the same query the multiplayer screen uses).
 static class ServerPing
 {
-    public static async Task<ServerStatus> QueryAsync(string address, TimeSpan timeout)
+    /// clientProtocol is sent in the handshake like the game does (some servers answer per version).
+    public static async Task<ServerStatus> QueryAsync(string address, TimeSpan timeout, int? clientProtocol = null)
     {
         var (host, port) = ParseAddress(address);
         using var cts = new CancellationTokenSource(timeout);
@@ -32,7 +34,7 @@ static class ServerPing
 
             var handshake = new MemoryStream();
             WriteVarInt(handshake, 0x00);
-            WriteVarInt(handshake, 767);
+            WriteVarInt(handshake, clientProtocol ?? 767);
             byte[] hostBytes = Encoding.UTF8.GetBytes(host);
             WriteVarInt(handshake, hostBytes.Length);
             handshake.Write(hostBytes);
@@ -70,7 +72,8 @@ static class ServerPing
             }
             string? description = root.TryGetProperty("description", out var d) ? d.GetRawText() : null;
             string? favicon = root.TryGetProperty("favicon", out var f) ? f.GetString() : null;
-            return new ServerStatus(true, version, online, max, names, description, favicon, ping, null);
+            int? protocol = root.TryGetProperty("version", out var pv) && pv.TryGetProperty("protocol", out var pp) && pp.TryGetInt32(out int pn) ? pn : null;
+            return new ServerStatus(true, version, online, max, names, description, favicon, ping, null, protocol);
         }
         catch (OperationCanceledException)
         {

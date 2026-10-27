@@ -384,6 +384,8 @@ sealed class ServerListForm : Form
             font.Draw(g, lines[i], x + 35, y + 12 + McFont.LineHeight * i);
 
         int pingX = x + RowWidth - 15;
+        // Like the game: a server on another protocol than the profile's version can't be joined.
+        bool incompatible = status is { Online: true, Protocol: int server } && _assets.ClientProtocol is int client && server != client;
         string sprite;
         if (status == null)
         {
@@ -391,6 +393,7 @@ sealed class ServerListForm : Form
             sprite = $"gui/sprites/server_list/pinging_{(frame > 4 ? 8 - frame : frame) + 1}.png";
         }
         else if (!status.Online) sprite = "gui/sprites/server_list/unreachable.png";
+        else if (incompatible) sprite = "gui/sprites/server_list/incompatible.png";
         else
         {
             long ms = status.PingMs ?? 0;
@@ -407,13 +410,20 @@ sealed class ServerListForm : Form
             {
                 null => McText.Plain("Pinging...", McStyle.White),
                 { Online: false } => McText.Plain($"Can't connect: {status.Error}", new McStyle(0xFF5555)),
+                _ when incompatible => McText.Plain("Incompatible version!", new McStyle(0xFF5555)),
                 _ => McText.Plain(status.PingMs is { } ms ? $"{ms} ms" : "(no ping)", McStyle.White),
             };
-            if (status is { Online: true, Version: { } version })
+            if (status is { Online: true, Version: { } version } && !incompatible)
                 tooltip.AddRange(McText.Plain("\n" + version, McStyle.Gray));
         }
 
-        if (status is { Online: true })
+        if (incompatible)
+        {
+            // The server's version in red where the player count would be.
+            var version = McText.FromJson(System.Text.Json.JsonSerializer.Serialize(status!.Version ?? "?"), new McStyle(0xFF5555));
+            font.Draw(g, version, pingX - 2 - font.Width(version), y + 1);
+        }
+        else if (status is { Online: true })
         {
             var count = McText.Plain(status.PlayersOnline.ToString(), McStyle.Gray);
             count.AddRange(McText.Plain("/", new McStyle(McText.DarkGray)));
