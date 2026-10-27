@@ -32,7 +32,7 @@ sealed record McProfile(
     }
 
     /// Every profile we can find, from all supported launchers.
-    public static List<McProfile> Discover() => [.. PrismInstances(), .. VanillaProfiles()];
+    public static List<McProfile> Discover() => [.. PrismInstances(), .. VanillaProfiles(), .. ModrinthProfiles()];
 
     public static string PrismRoot()
     {
@@ -131,6 +131,54 @@ sealed record McProfile(
                 VanillaJar(mc, versionId), Directory.Exists(assets) ? assets : null,
                 ReadResourcePacks(gameDir), lastUsed, null);
         }
+    }
+
+    /// Modrinth App profiles. Their game version lives in the app's SQLite database, so we read it
+    /// from the game's own log line instead ("Loading Minecraft 1.21.4 with Fabric Loader ...").
+    static IEnumerable<McProfile> ModrinthProfiles()
+    {
+        string app = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ModrinthApp");
+        string dir = Path.Combine(app, "profiles");
+        if (!Directory.Exists(dir)) yield break;
+
+        string meta = Path.Combine(app, "meta");
+        string assets = Path.Combine(meta, "assets");
+        foreach (string gameDir in Directory.EnumerateDirectories(dir))
+        {
+            string log = Path.Combine(gameDir, "logs", "latest.log");
+            string? version = null;
+            if (File.Exists(log))
+            {
+                try
+                {
+                    var m = File.ReadLines(log).Take(200)
+                        .Select(l => System.Text.RegularExpressions.Regex.Match(l, @"Loading Minecraft (\S+)"))
+                        .FirstOrDefault(m => m.Success);
+                    version = m?.Groups[1].Value;
+                }
+                catch (IOException)
+                {
+                    // Log locked by a running game; fall back to any jar.
+                }
+            }
+            long lastLaunch = File.Exists(log) ? new DateTimeOffset(File.GetLastWriteTimeUtc(log)).ToUnixTimeMilliseconds() : 0;
+            yield return new McProfile("modrinth:" + Path.GetFileName(gameDir), "Modrinth App", Path.GetFileName(gameDir), gameDir,
+                ModrinthJar(meta, version), Directory.Exists(assets) ? assets : null,
+                ReadResourcePacks(gameDir), lastLaunch, null);
+        }
+    }
+
+    /// Modrinth keeps jars as meta/versions/<mc>-<loader>/<mc>-<loader>.jar.
+    static string? ModrinthJar(string meta, string? version)
+    {
+        string versions = Path.Combine(meta, "versions");
+        if (!Directory.Exists(versions)) return null;
+        var dirs = Directory.EnumerateDirectories(versions).ToList();
+        string? match = dirs.FirstOrDefault(d => version != null && (Path.GetFileName(d) == version || Path.GetFileName(d).StartsWith(version + "-")))
+            ?? dirs.OrderByDescending(Directory.GetLastWriteTimeUtc).FirstOrDefault();
+        if (match == null) return null;
+        string jar = Path.Combine(match, Path.GetFileName(match) + ".jar");
+        return File.Exists(jar) ? jar : null;
     }
 
     /// The jar for a launcher version id, following "latest-*" and loader inheritsFrom chains to the vanilla jar.
