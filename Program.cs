@@ -392,7 +392,6 @@ sealed class TrayApp : IDisposable
                 Tag = new MenuTag(Subtitle: _profile.Name),
             });
         _menu.Items.Add("Show servers", null, (_, _) => TogglePopup());
-        _menu.Items.Add("Refresh now", null, async (_, _) => await PollAsync());
         _menu.Items.Add(BuildProfileMenu());
 
         var startup = new ToolStripMenuItem("Start with Windows") { Checked = IsStartupEnabled() };
