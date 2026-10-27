@@ -62,7 +62,10 @@ sealed class McMenuRenderer(Func<McAssets> assets) : ToolStripRenderer
             item.AutoSize = false;
             int h = item is ToolStripSeparator ? 5 : Subtitle(item) != null ? SubtitledHeight : ItemHeight;
             item.Size = new Size(width, h * s);
-            item.Margin = new Padding(0, item == all[0] ? (Inset + 1) * s : 0, 0, item == all[^1] ? (Inset + 1) * s : 0);
+            // Leaves the same gap between the frame and a highlighted first/last row as between a
+            // highlighted row and a separator line. The dropdown already adds 1 GUI px above the
+            // first row but nothing below the last, hence the uneven margins.
+            item.Margin = new Padding(0, item == all[0] ? Inset * s : 0, 0, item == all[^1] ? (Inset + 1) * s : 0);
             height += item.Height + item.Margin.Vertical;
             if (item is ToolStripMenuItem { HasDropDownItems: true, DropDown: ToolStripDropDownMenu sub })
                 Apply(sub);
@@ -113,8 +116,9 @@ sealed class McMenuRenderer(Func<McAssets> assets) : ToolStripRenderer
         // The whole row, clipped to the inside of the frame on every side (WinForms may place
         // the first and last rows closer to the edge than the padding asks for).
         var (left, right) = Edges(e.Item, s);
-        float top = Math.Max(0, Inset * s - e.Item.Bounds.Y);
-        float bottom = Math.Min(e.Item.Height, e.Item.Owner!.Height - Inset * s - e.Item.Bounds.Y);
+        // Vertically the frame line ends 2 GUI px in, plus the 2 px gap a separator also leaves.
+        float top = Math.Max(0, (Inset + 1) * s - e.Item.Bounds.Y);
+        float bottom = Math.Min(e.Item.Height, e.Item.Owner!.Height - (Inset + 1) * s - e.Item.Bounds.Y);
         using var hover = new SolidBrush(Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF));
         e.Graphics.FillRectangle(hover, RectangleF.FromLTRB((left + Inset) * s, top, (right - Inset) * s, bottom));
     }

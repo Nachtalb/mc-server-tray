@@ -83,7 +83,8 @@ sealed class TrayApp : IDisposable
             profiles.ShowDropDown();
             // --select N highlights the Nth submenu row (default: the first launcher heading).
             var rows = profiles.DropDown.Items.OfType<ToolStripMenuItem>().ToList();
-            (selectedRow >= 0 && selectedRow < rows.Count ? rows[selectedRow] : rows.FirstOrDefault(i => i.Tag is MenuTag { Header: true }))?.Select();
+            int pick = selectedRow < 0 ? rows.FindIndex(i => i.Tag is MenuTag { Header: true }) : Math.Min(selectedRow, rows.Count - 1);
+            if (pick >= 0) rows[pick].Select();
             Application.DoEvents();
             var sub = profiles.DropDown;
             using var shot = new Bitmap(_menu.Width + sub.Width + 8, Math.Max(_menu.Height, sub.Height));
