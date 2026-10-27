@@ -58,7 +58,7 @@ sealed class TrayApp : IDisposable
     readonly ServerListForm _popup;
     McAssets _assets;
     McProfile? _profile;
-    DateTime _optionsStamp;
+    string? _lookSignature;
     Icon _iconIdle;
     Icon _iconActive;
 
@@ -93,9 +93,9 @@ sealed class TrayApp : IDisposable
         _tray.Visible = showTray;
         _tray.MouseClick += (_, e) =>
         {
-            if (e.Button == MouseButtons.Left) _popup.Toggle();
+            if (e.Button == MouseButtons.Left) TogglePopup();
         };
-        _tray.BalloonTipClicked += (_, _) => _popup.Toggle();
+        _tray.BalloonTipClicked += (_, _) => TogglePopup();
         _menu.Opening += (_, _) => BuildMenu();
 
         _timer.Interval = (int)PollInterval.TotalMilliseconds;
@@ -108,7 +108,7 @@ sealed class TrayApp : IDisposable
     (McProfile? profile, McAssets assets) LoadLook()
     {
         var profile = McProfile.PrismInstances(_prismRoot).MaxBy(p => p.LastLaunch);
-        _optionsStamp = profile != null && File.Exists(profile.OptionsFile) ? File.GetLastWriteTimeUtc(profile.OptionsFile) : default;
+        _lookSignature = profile?.Signature();
         return (profile, McAssets.Load(_prismRoot, profile));
     }
 
@@ -116,14 +116,21 @@ sealed class TrayApp : IDisposable
     void ReloadLookIfChanged()
     {
         var latest = McProfile.PrismInstances(_prismRoot).MaxBy(p => p.LastLaunch);
-        var stamp = latest != null && File.Exists(latest.OptionsFile) ? File.GetLastWriteTimeUtc(latest.OptionsFile) : default;
-        if (latest?.GameDir == _profile?.GameDir && stamp == _optionsStamp) return;
+        if (latest?.Signature() == _lookSignature) return;
 
         var old = _assets;
         (_profile, _assets) = LoadLook();
         _popup.SetAssets(_assets);
         (_iconIdle, _iconActive) = MakeTrayIcons(_assets.Sprite("block/grass_block_side.png")?.Image);
+        UpdateTray();
         old.Dispose();
+    }
+
+    /// Opening the list checks the resource packs first, so pack changes show up immediately.
+    void TogglePopup()
+    {
+        if (!_popup.Visible) ReloadLookIfChanged();
+        _popup.Toggle();
     }
 
     /// Starts the server's Prism instance straight into the server, preferring the instance we take the look from.
@@ -159,7 +166,7 @@ sealed class TrayApp : IDisposable
 
     public void ShowPopup() => _popup.BeginInvoke(() =>
     {
-        if (!_popup.Visible) _popup.Toggle();
+        if (!_popup.Visible) TogglePopup();
     });
 
     IReadOnlyList<ServerView> Views() =>
@@ -304,7 +311,7 @@ sealed class TrayApp : IDisposable
     void BuildMenu()
     {
         _menu.Items.Clear();
-        _menu.Items.Add("Show servers", null, (_, _) => _popup.Toggle());
+        _menu.Items.Add("Show servers", null, (_, _) => TogglePopup());
         _menu.Items.Add("Refresh now", null, async (_, _) => await PollAsync());
 
         var startup = new ToolStripMenuItem("Start with Windows") { Checked = IsStartupEnabled() };

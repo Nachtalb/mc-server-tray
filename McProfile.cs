@@ -7,6 +7,20 @@ sealed record McProfile(string Name, string GameDir, string? McVersion, IReadOnl
 {
     public string OptionsFile => Path.Combine(GameDir, "options.txt");
 
+    /// Changes whenever the look would: options.txt (pack list/order) or any enabled pack file being replaced.
+    public string Signature()
+    {
+        var parts = new List<string> { GameDir, Stamp(OptionsFile) };
+        foreach (string pack in ResourcePacks.Where(p => p.StartsWith("file/")))
+            parts.Add(Stamp(Path.Combine(GameDir, "resourcepacks", pack["file/".Length..])));
+        return string.Join('|', parts);
+
+        static string Stamp(string path) =>
+            File.Exists(path) ? $"{path}@{File.GetLastWriteTimeUtc(path).Ticks}:{new FileInfo(path).Length}" :
+            Directory.Exists(path) ? $"{path}@{Directory.GetLastWriteTimeUtc(path).Ticks}" :
+            $"{path}@missing";
+    }
+
     /// Prism instances; the one played last is what we take the textures from.
     public static List<McProfile> PrismInstances(string prismRoot)
     {
