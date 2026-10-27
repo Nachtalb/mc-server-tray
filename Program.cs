@@ -41,8 +41,8 @@ static class Program
     }
 }
 
-/// A saved server, with the Prism instances (folder names) that have it in their list.
-record ServerEntry(string Name, string Address, string? IconBase64, List<string> Instances);
+/// A saved server, with the profiles that have it in their list.
+record ServerEntry(string Name, string Address, string? IconBase64, List<McProfile> Profiles);
 
 sealed class TrayApp : IDisposable
 {
@@ -81,7 +81,7 @@ sealed class TrayApp : IDisposable
     {
         (_profile, _assets) = LoadLook();
         (_iconIdle, _iconActive) = MakeTrayIcons(_assets.Sprite("block/grass_block_side.png")?.Image);
-        _servers = LoadServers(_prismRoot);
+        _servers = LoadServers(McProfile.Discover());
 
         _popup = new ServerListForm(_assets, Views, PollAsync, Join);
         // ShowPopup marshals onto the popup, which needs a handle even while it's hidden.
@@ -133,17 +133,21 @@ sealed class TrayApp : IDisposable
         _popup.Toggle();
     }
 
-    /// Starts the server's Prism instance straight into the server, preferring the instance we take the look from.
+    /// Starts a Prism instance that has the server straight into it, preferring the profile we take the look from.
+    /// Other launchers can't be told to join a server, so for those the address goes to the clipboard.
     void Join(ServerView view)
     {
+        var profiles = view.Entry.Profiles;
+        string? instance = (profiles.FirstOrDefault(p => p.Id == _profile?.Id && p.PrismInstance != null)
+            ?? profiles.FirstOrDefault(p => p.PrismInstance != null))?.PrismInstance;
         string? exe = PrismExecutable();
-        if (exe == null)
+        if (instance == null || exe == null)
         {
-            _tray.ShowBalloonTip(5000, "Can't join", "Couldn't find prismlauncher.exe", ToolTipIcon.Warning);
+            Clipboard.SetText(view.Entry.Address);
+            _tray.ShowBalloonTip(5000, view.Entry.Name,
+                $"Start {profiles[0].Name} in the {profiles[0].Launcher} and join - the address {view.Entry.Address} is on your clipboard.", ToolTipIcon.Info);
             return;
         }
-        string? current = _profile?.PrismInstance;
-        string instance = current != null && view.Entry.Instances.Contains(current) ? current : view.Entry.Instances[0];
         System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe)
         {
             ArgumentList = { "--launch", instance, "--server", view.Entry.Address },
@@ -195,44 +199,38 @@ sealed class TrayApp : IDisposable
         return _iconCache[base64] = bmp;
     }
 
-    /// Union of the server lists of every Prism instance, de-duplicated by address.
-    static List<ServerEntry> LoadServers(string prismRoot)
+    /// Union of the server lists of every profile, de-duplicated by address.
+    static List<ServerEntry> LoadServers(IEnumerable<McProfile> profiles)
     {
         var result = new List<ServerEntry>();
         var seen = new Dictionary<string, ServerEntry>(StringComparer.OrdinalIgnoreCase);
-        string dir = Path.Combine(prismRoot, "instances");
-        if (!Directory.Exists(dir)) return result;
 
-        foreach (string instance in Directory.EnumerateDirectories(dir))
+        foreach (var profile in profiles)
         {
-            foreach (string sub in new[] { "minecraft", ".minecraft" })
+            string file = Path.Combine(profile.GameDir, "servers.dat");
+            if (!File.Exists(file)) continue;
+            try
             {
-                string file = Path.Combine(instance, sub, "servers.dat");
-                if (!File.Exists(file)) continue;
-                try
+                if (Nbt.ReadFile(file) is not Dictionary<string, object?> root ||
+                    !root.TryGetValue("servers", out var list) || list is not List<object?> servers)
+                    continue;
+                foreach (var s in servers.OfType<Dictionary<string, object?>>())
                 {
-                    if (Nbt.ReadFile(file) is not Dictionary<string, object?> root ||
-                        !root.TryGetValue("servers", out var list) || list is not List<object?> servers)
-                        continue;
-                    foreach (var s in servers.OfType<Dictionary<string, object?>>())
+                    if (s.GetValueOrDefault("ip") is not string ip || string.IsNullOrWhiteSpace(ip)) continue;
+                    if (seen.TryGetValue(ip, out var existing))
                     {
-                        if (s.GetValueOrDefault("ip") is not string ip || string.IsNullOrWhiteSpace(ip)) continue;
-                        string id = Path.GetFileName(instance);
-                        if (seen.TryGetValue(ip, out var existing))
-                        {
-                            if (!existing.Instances.Contains(id)) existing.Instances.Add(id);
-                            continue;
-                        }
-                        string name = s.GetValueOrDefault("name") as string ?? ip;
-                        var entry = new ServerEntry(name, ip, s.GetValueOrDefault("icon") as string, [id]);
-                        seen[ip] = entry;
-                        result.Add(entry);
+                        if (!existing.Profiles.Contains(profile)) existing.Profiles.Add(profile);
+                        continue;
                     }
+                    string name = s.GetValueOrDefault("name") as string ?? ip;
+                    var entry = new ServerEntry(name, ip, s.GetValueOrDefault("icon") as string, [profile]);
+                    seen[ip] = entry;
+                    result.Add(entry);
                 }
-                catch
-                {
-                    // Prism may be writing the file right now; we'll pick it up next poll.
-                }
+            }
+            catch
+            {
+                // The game may be writing the file right now; we'll pick it up next poll.
             }
         }
         return result;
@@ -244,7 +242,7 @@ sealed class TrayApp : IDisposable
     async Task PollOnceAsync()
     {
         ReloadLookIfChanged();
-        var servers = LoadServers(_prismRoot);
+        var servers = LoadServers(McProfile.Discover());
         bool listChanged = !servers.Select(s => s.Address).SequenceEqual(_servers.Select(s => s.Address));
         _servers = servers;
         if (listChanged && _popup.Visible) _popup.Relayout();

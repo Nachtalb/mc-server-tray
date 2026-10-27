@@ -32,7 +32,7 @@ sealed record McProfile(
     }
 
     /// Every profile we can find, from all supported launchers.
-    public static List<McProfile> Discover() => [.. PrismInstances()];
+    public static List<McProfile> Discover() => [.. PrismInstances(), .. VanillaProfiles()];
 
     public static string PrismRoot()
     {
@@ -95,6 +95,89 @@ sealed record McProfile(
             // Not a Prism instance or a broken pack file; fall back to the newest jar.
         }
         return null;
+    }
+
+    /// Profiles of the official Minecraft Launcher (launcher_profiles.json in .minecraft).
+    static IEnumerable<McProfile> VanillaProfiles()
+    {
+        string mc = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), ".minecraft");
+        string file = Path.Combine(mc, "launcher_profiles.json");
+        if (!File.Exists(file)) yield break;
+
+        List<(string key, JsonElement p)> profiles;
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(file));
+            profiles = doc.RootElement.GetProperty("profiles").EnumerateObject().Select(p => (p.Name, p.Value.Clone())).ToList();
+        }
+        catch
+        {
+            yield break;
+        }
+
+        string assets = Path.Combine(mc, "assets");
+        foreach (var (key, p) in profiles)
+        {
+            string type = p.TryGetProperty("type", out var t) ? t.GetString() ?? "" : "";
+            string? name = p.TryGetProperty("name", out var n) ? n.GetString() : null;
+            if (string.IsNullOrEmpty(name))
+                name = type switch { "latest-release" => "Latest release", "latest-snapshot" => "Latest snapshot", _ => key };
+            string gameDir = p.TryGetProperty("gameDir", out var gd) && gd.GetString() is { Length: > 0 } dir ? dir : mc;
+            if (!Directory.Exists(gameDir)) continue;
+
+            long lastUsed = p.TryGetProperty("lastUsed", out var lu) && lu.TryGetDateTimeOffset(out var when) ? when.ToUnixTimeMilliseconds() : 0;
+            string? versionId = p.TryGetProperty("lastVersionId", out var v) ? v.GetString() : null;
+            yield return new McProfile("vanilla:" + key, "Minecraft Launcher", name, gameDir,
+                VanillaJar(mc, versionId), Directory.Exists(assets) ? assets : null,
+                ReadResourcePacks(gameDir), lastUsed, null);
+        }
+    }
+
+    /// The jar for a launcher version id, following "latest-*" and loader inheritsFrom chains to the vanilla jar.
+    static string? VanillaJar(string mc, string? versionId)
+    {
+        string versions = Path.Combine(mc, "versions");
+        if (!Directory.Exists(versions)) return null;
+
+        if (versionId is "latest-release" or "latest-snapshot")
+        {
+            string wanted = versionId == "latest-release" ? "release" : "snapshot";
+            versionId = Directory.EnumerateDirectories(versions)
+                .Select(d => (id: Path.GetFileName(d), json: ReadVersionJson(versions, Path.GetFileName(d))))
+                .Where(x => x.json is { } j && j.type == wanted && j.inheritsFrom == null && File.Exists(Path.Combine(versions, x.id, x.id + ".jar")))
+                .OrderByDescending(x => x.json!.Value.releaseTime)
+                .Select(x => x.id)
+                .FirstOrDefault();
+        }
+
+        for (int depth = 0; versionId != null && depth < 5; depth++)
+        {
+            var json = ReadVersionJson(versions, versionId);
+            if (json?.inheritsFrom is { } parent)
+            {
+                versionId = parent;
+                continue;
+            }
+            string jar = Path.Combine(versions, versionId, versionId + ".jar");
+            return File.Exists(jar) ? jar : null;
+        }
+        return null;
+    }
+
+    static (string? type, string? inheritsFrom, string releaseTime)? ReadVersionJson(string versions, string id)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(Path.Combine(versions, id, id + ".json")));
+            var r = doc.RootElement;
+            return (r.TryGetProperty("type", out var t) ? t.GetString() : null,
+                r.TryGetProperty("inheritsFrom", out var i) ? i.GetString() : null,
+                r.TryGetProperty("releaseTime", out var rt) ? rt.GetString() ?? "" : "");
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     /// The `resourcePacks` list from options.txt, lowest priority first (as the game stores it).
