@@ -32,7 +32,13 @@ sealed record McProfile(
     }
 
     /// Every profile we can find, from all supported launchers.
-    public static List<McProfile> Discover() => [.. PrismInstances(), .. VanillaProfiles(), .. ModrinthProfiles()];
+    public static List<McProfile> Discover()
+    {
+        List<McProfile> all = [.. PrismInstances(), .. VanillaProfiles(), .. ModrinthProfiles()];
+        // A launcher may have the version json but not the jar (never launched); borrow the newest jar we have.
+        string? fallback = all.Select(p => p.ClientJar).OfType<string>().Distinct().OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault();
+        return all.Select(p => p.ClientJar == null ? p with { ClientJar = fallback } : p).ToList();
+    }
 
     public static string PrismRoot()
     {
