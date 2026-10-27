@@ -240,6 +240,34 @@ sealed class TrayApp : IDisposable
             return new ServerView(s, status, DecodeIcon(status?.FaviconBase64 ?? s.IconBase64));
         }).ToList();
 
+    /// A profile's picture: its own image if it has one, else the first texture the active packs provide.
+    Bitmap? ProfileImage(McProfile profile)
+    {
+        var icon = profile.Icon;
+        if (icon.File != null && _iconCache.TryGetValue("file:" + icon.File, out var cached)) return cached;
+        if (icon.File != null)
+        {
+            try
+            {
+                using var img = Image.FromFile(icon.File);
+                return _iconCache["file:" + icon.File] = new Bitmap(img);
+            }
+            catch (Exception e) when (e is IOException or OutOfMemoryException)
+            {
+                _iconCache["file:" + icon.File] = null;
+            }
+        }
+        if (DecodeIcon(icon.DataUri) is { } fromUri) return fromUri;
+        foreach (string texture in icon.Textures)
+            if (_assets.Sprite(texture) is { } sprite)
+                return FirstFrame(sprite.Image);
+        return null;
+    }
+
+    /// Animated textures are a vertical strip of square frames; keep the first one.
+    static Bitmap FirstFrame(Bitmap img) =>
+        img.Height <= img.Width ? img : img.Clone(new Rectangle(0, 0, img.Width, img.Width), img.PixelFormat);
+
     Bitmap? DecodeIcon(string? base64)
     {
         if (string.IsNullOrEmpty(base64)) return null;
@@ -361,7 +389,7 @@ sealed class TrayApp : IDisposable
     {
         _menu.Items.Clear();
         if (_profile != null)
-            _menu.Items.Add(new ToolStripMenuItem($"Launch Game ({_profile.Name})", null, (_, _) => LaunchGame()) { Font = new Font(_menu.Font, FontStyle.Bold) });
+            _menu.Items.Add(new ToolStripMenuItem($"Launch Game ({_profile.Name})", ProfileImage(_profile), (_, _) => LaunchGame()) { Font = new Font(_menu.Font, FontStyle.Bold) });
         _menu.Items.Add("Show servers", null, (_, _) => TogglePopup());
         _menu.Items.Add("Refresh now", null, async (_, _) => await PollAsync());
         _menu.Items.Add(BuildProfileMenu());
@@ -406,7 +434,7 @@ sealed class TrayApp : IDisposable
             menu.DropDownItems.Add(new ToolStripSeparator());
             menu.DropDownItems.Add(new ToolStripMenuItem(group.Key) { Enabled = false });
             foreach (var profile in group.OrderByDescending(p => p.LastLaunch))
-                menu.DropDownItems.Add(new ToolStripMenuItem(profile.Name, null, (_, _) => SetDefaultProfile(profile.Id))
+                menu.DropDownItems.Add(new ToolStripMenuItem(profile.Name, ProfileImage(profile), (_, _) => SetDefaultProfile(profile.Id))
                 {
                     Checked = profile.Id == chosen,
                     ToolTipText = profile.GameDir,

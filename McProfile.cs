@@ -13,7 +13,8 @@ sealed record McProfile(
     string? AssetsDir,
     IReadOnlyList<string> ResourcePacks,
     long LastLaunch,
-    string? PrismInstance)
+    string? PrismInstance,
+    ProfileIcon Icon)
 {
     public string OptionsFile => Path.Combine(GameDir, "options.txt");
 
@@ -68,7 +69,7 @@ sealed record McProfile(
             string name = cfg.GetValueOrDefault("name") ?? id;
             yield return new McProfile("prism:" + id, "Prism Launcher", name, gameDir,
                 PrismJar(root, ReadPrismVersion(instance)), Directory.Exists(assets) ? assets : null,
-                ReadResourcePacks(gameDir), lastLaunch, id);
+                ReadResourcePacks(gameDir), lastLaunch, id, ProfileIcon.Prism(root, cfg.GetValueOrDefault("iconKey")));
         }
     }
 
@@ -133,9 +134,10 @@ sealed record McProfile(
 
             long lastUsed = p.TryGetProperty("lastUsed", out var lu) && lu.TryGetDateTimeOffset(out var when) ? when.ToUnixTimeMilliseconds() : 0;
             string? versionId = p.TryGetProperty("lastVersionId", out var v) ? v.GetString() : null;
+            string? icon = p.TryGetProperty("icon", out var ic) ? ic.GetString() : null;
             yield return new McProfile("vanilla:" + key, "Minecraft Launcher", name, gameDir,
                 VanillaJar(mc, versionId), Directory.Exists(assets) ? assets : null,
-                ReadResourcePacks(gameDir), lastUsed, null);
+                ReadResourcePacks(gameDir), lastUsed, null, ProfileIcon.Vanilla(icon));
         }
     }
 
@@ -170,7 +172,7 @@ sealed record McProfile(
             long lastLaunch = File.Exists(log) ? new DateTimeOffset(File.GetLastWriteTimeUtc(log)).ToUnixTimeMilliseconds() : 0;
             yield return new McProfile("modrinth:" + Path.GetFileName(gameDir), "Modrinth App", Path.GetFileName(gameDir), gameDir,
                 ModrinthJar(meta, version), Directory.Exists(assets) ? assets : null,
-                ReadResourcePacks(gameDir), lastLaunch, null);
+                ReadResourcePacks(gameDir), lastLaunch, null, ProfileIcon.Default);
         }
     }
 
