@@ -80,7 +80,7 @@ sealed class McAssets : IDisposable
         Font = LoadFont();
     }
 
-    public static McAssets Load(string prismRoot, McProfile? profile)
+    public static McAssets Load(McProfile? profile)
     {
         var sources = new List<AssetSource>();
         if (profile != null)
@@ -93,25 +93,10 @@ sealed class McAssets : IDisposable
                     sources.Add(src);
             }
         }
-        if (FindClientJar(prismRoot, profile?.McVersion) is { } jar && AssetSource.Open(jar) is { } jarSource)
+        if (profile?.ClientJar is { } jar && AssetSource.Open(jar) is { } jarSource)
             sources.Add(jarSource);
 
-        string assetsDir = Path.Combine(prismRoot, "assets");
-        return new McAssets(sources, Directory.Exists(assetsDir) ? assetsDir : null);
-    }
-
-    static string? FindClientJar(string prismRoot, string? version)
-    {
-        string dir = Path.Combine(prismRoot, @"libraries\com\mojang\minecraft");
-        if (!Directory.Exists(dir)) return null;
-        if (version != null)
-        {
-            string exact = Path.Combine(dir, version, $"minecraft-{version}-client.jar");
-            if (File.Exists(exact)) return exact;
-        }
-        return Directory.EnumerateFiles(dir, "minecraft-*-client.jar", SearchOption.AllDirectories)
-            .OrderByDescending(File.GetLastWriteTimeUtc)
-            .FirstOrDefault();
+        return new McAssets(sources, profile?.AssetsDir);
     }
 
     /// Reads assets/minecraft/<path> from the highest-priority source that has it.

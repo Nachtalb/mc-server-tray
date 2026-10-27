@@ -2,8 +2,18 @@ using System.Text.Json;
 
 namespace McServerTray;
 
-/// A Minecraft game directory whose look (version jar + enabled resource packs) we borrow.
-sealed record McProfile(string Name, string GameDir, string? McVersion, IReadOnlyList<string> ResourcePacks, long LastLaunch)
+/// A Minecraft game directory from some launcher: where its servers.dat and resource packs live,
+/// and which client jar / asset store its look comes from.
+sealed record McProfile(
+    string Id,
+    string Launcher,
+    string Name,
+    string GameDir,
+    string? ClientJar,
+    string? AssetsDir,
+    IReadOnlyList<string> ResourcePacks,
+    long LastLaunch,
+    string? PrismInstance)
 {
     public string OptionsFile => Path.Combine(GameDir, "options.txt");
 
@@ -21,13 +31,26 @@ sealed record McProfile(string Name, string GameDir, string? McVersion, IReadOnl
             $"{path}@missing";
     }
 
-    /// Prism instances; the one played last is what we take the textures from.
-    public static List<McProfile> PrismInstances(string prismRoot)
-    {
-        var result = new List<McProfile>();
-        string dir = Path.Combine(prismRoot, "instances");
-        if (!Directory.Exists(dir)) return result;
+    /// Every profile we can find, from all supported launchers.
+    public static List<McProfile> Discover() => [.. PrismInstances()];
 
+    public static string PrismRoot()
+    {
+        string[] candidates =
+        [
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), @"scoop\persist\prismlauncher"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "PrismLauncher"),
+        ];
+        return candidates.FirstOrDefault(d => Directory.Exists(Path.Combine(d, "instances"))) ?? candidates[0];
+    }
+
+    static IEnumerable<McProfile> PrismInstances()
+    {
+        string root = PrismRoot();
+        string dir = Path.Combine(root, "instances");
+        if (!Directory.Exists(dir)) yield break;
+
+        string assets = Path.Combine(root, "assets");
         foreach (string instance in Directory.EnumerateDirectories(dir))
         {
             string? gameDir = new[] { "minecraft", ".minecraft" }.Select(s => Path.Combine(instance, s)).FirstOrDefault(Directory.Exists);
@@ -35,10 +58,27 @@ sealed record McProfile(string Name, string GameDir, string? McVersion, IReadOnl
 
             var cfg = ReadKeyValues(Path.Combine(instance, "instance.cfg"), '=');
             long.TryParse(cfg.GetValueOrDefault("lastLaunchTime"), out long lastLaunch);
-            string name = cfg.GetValueOrDefault("name") ?? Path.GetFileName(instance);
-            result.Add(new McProfile(name, gameDir, ReadPrismVersion(instance), ReadResourcePacks(gameDir), lastLaunch));
+            string id = Path.GetFileName(instance);
+            string name = cfg.GetValueOrDefault("name") ?? id;
+            yield return new McProfile("prism:" + id, "Prism Launcher", name, gameDir,
+                PrismJar(root, ReadPrismVersion(instance)), Directory.Exists(assets) ? assets : null,
+                ReadResourcePacks(gameDir), lastLaunch, id);
         }
-        return result;
+    }
+
+    /// The instance's client jar from Prism's library cache, else the newest one there.
+    static string? PrismJar(string root, string? version)
+    {
+        string dir = Path.Combine(root, @"libraries\com\mojang\minecraft");
+        if (!Directory.Exists(dir)) return null;
+        if (version != null)
+        {
+            string exact = Path.Combine(dir, version, $"minecraft-{version}-client.jar");
+            if (File.Exists(exact)) return exact;
+        }
+        return Directory.EnumerateFiles(dir, "minecraft-*-client.jar", SearchOption.AllDirectories)
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .FirstOrDefault();
     }
 
     static string? ReadPrismVersion(string instance)

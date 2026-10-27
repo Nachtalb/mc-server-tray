@@ -54,7 +54,7 @@ sealed class TrayApp : IDisposable
     readonly NotifyIcon _tray = new();
     readonly ContextMenuStrip _menu = new();
     readonly System.Windows.Forms.Timer _timer = new();
-    readonly string _prismRoot = PrismRoot();
+    readonly string _prismRoot = McProfile.PrismRoot();
     readonly ServerListForm _popup;
     McAssets _assets;
     McProfile? _profile;
@@ -104,18 +104,18 @@ sealed class TrayApp : IDisposable
         _ = PollAsync();
     }
 
-    /// Textures come from the Prism instance played last: its game version and enabled resource packs.
+    /// Textures come from the profile played last: its game version and enabled resource packs.
     (McProfile? profile, McAssets assets) LoadLook()
     {
-        var profile = McProfile.PrismInstances(_prismRoot).MaxBy(p => p.LastLaunch);
+        var profile = McProfile.Discover().MaxBy(p => p.LastLaunch);
         _lookSignature = profile?.Signature();
-        return (profile, McAssets.Load(_prismRoot, profile));
+        return (profile, McAssets.Load(profile));
     }
 
     /// Picks up resource pack changes (or a different instance being played) without a restart.
     void ReloadLookIfChanged()
     {
-        var latest = McProfile.PrismInstances(_prismRoot).MaxBy(p => p.LastLaunch);
+        var latest = McProfile.Discover().MaxBy(p => p.LastLaunch);
         if (latest?.Signature() == _lookSignature) return;
 
         var old = _assets;
@@ -142,8 +142,8 @@ sealed class TrayApp : IDisposable
             _tray.ShowBalloonTip(5000, "Can't join", "Couldn't find prismlauncher.exe", ToolTipIcon.Warning);
             return;
         }
-        string? current = _profile != null ? Path.GetFileName(Path.GetDirectoryName(_profile.GameDir)) : null;
-        string instance = view.Entry.Instances.Contains(current ?? "") ? current! : view.Entry.Instances[0];
+        string? current = _profile?.PrismInstance;
+        string instance = current != null && view.Entry.Instances.Contains(current) ? current : view.Entry.Instances[0];
         System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe)
         {
             ArgumentList = { "--launch", instance, "--server", view.Entry.Address },
@@ -193,16 +193,6 @@ sealed class TrayApp : IDisposable
             // Broken favicon; show the default icon instead.
         }
         return _iconCache[base64] = bmp;
-    }
-
-    static string PrismRoot()
-    {
-        string[] candidates =
-        [
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), @"scoop\persist\prismlauncher"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "PrismLauncher"),
-        ];
-        return candidates.FirstOrDefault(d => Directory.Exists(Path.Combine(d, "instances"))) ?? candidates[0];
     }
 
     /// Union of the server lists of every Prism instance, de-duplicated by address.
