@@ -14,6 +14,14 @@ sealed class McMenuRenderer(Func<McAssets> assets) : ToolStripRenderer
     const int SubtitledHeight = 24;
     const int ImageSize = 16;
     const int PlaySize = 12;
+    const int ArrowWidth = 6;
+
+    // Row layout in GUI pixels, measured from the dropdown's edges (not WinForms' text/arrow
+    // rectangles, which come from the Windows font): the frame takes Inset on each side.
+    const int Inset = 3;
+    const int Gap = 4;
+    const int IconX = Inset + 2;
+    const int TextX = IconX + ImageSize + Gap;
 
     static string? Subtitle(ToolStripItem item) => (item.Tag as MenuTag)?.Subtitle;
     static bool IsHeader(ToolStripItem item) => item.Tag is MenuTag { Header: true };
@@ -21,7 +29,11 @@ sealed class McMenuRenderer(Func<McAssets> assets) : ToolStripRenderer
     /// GUI scale for the strip's monitor (2 at 100%, like the popup).
     static int Scale(ToolStrip strip) => Math.Max(1, (int)Math.Round(strip.DeviceDpi / 96.0 * 2));
 
-    /// Sizes every item from the Minecraft font, since WinForms would measure with the Windows font.
+    /// Offsets (GUI px) from the item's left edge to the dropdown's left and right edges.
+    static (float left, float right) Edges(ToolStripItem item, int s) =>
+        (-(float)item.Bounds.X / s, (float)(item.Owner!.Width - item.Bounds.X) / s);
+
+    /// Sizes the dropdown to its widest row in the Minecraft font, since WinForms would measure with the Windows font.
     public void Apply(ToolStripDropDownMenu menu)
     {
         int s = Scale(menu);
@@ -30,14 +42,17 @@ sealed class McMenuRenderer(Func<McAssets> assets) : ToolStripRenderer
         menu.ShowCheckMargin = false;
         menu.ShowImageMargin = true;
         menu.ImageScalingSize = new Size(ImageSize * s, ImageSize * s);
-        menu.Padding = new Padding(3 * s, 4 * s, 3 * s, 4 * s);
+        menu.Padding = new Padding(0, 4 * s, 0, 4 * s);
 
-        var items = menu.Items.OfType<ToolStripMenuItem>().ToList();
-        float textWidth = items.Count == 0 ? 0 : items.Max(i => Math.Max(
-            font.Width(i.Text ?? "") + (i.Font.Bold ? (i.Text ?? "").Length : 0),
-            font.Width(Subtitle(i) ?? "")));
-        int playRoom = menu.Items.Cast<ToolStripItem>().Any(IsHeader) ? PlaySize + 4 : 0;
-        int width = (int)((ImageSize + 10 + textWidth + 16 + playRoom) * s);
+        float RowWidth(ToolStripMenuItem i)
+        {
+            float text = Math.Max(font.Width(i.Text ?? "") + (i.Font.Bold ? (i.Text ?? "").Length : 0), font.Width(Subtitle(i) ?? ""));
+            float right = i.HasDropDownItems ? Gap + ArrowWidth : IsHeader(i) ? Gap + PlaySize : 0;
+            return TextX + text + right + Gap + Inset;
+        }
+        var rows = menu.Items.OfType<ToolStripMenuItem>().ToList();
+        int width = (int)Math.Ceiling((rows.Count == 0 ? 40 : rows.Max(RowWidth)) * s);
+
         int height = 0;
         foreach (ToolStripItem item in menu.Items)
         {
@@ -49,9 +64,8 @@ sealed class McMenuRenderer(Func<McAssets> assets) : ToolStripRenderer
                 Apply(sub);
         }
 
-        // The dropdown would size itself with the Windows font; size it from our items instead.
         menu.AutoSize = false;
-        menu.Size = new Size(width + menu.Padding.Horizontal + 2, height + menu.Padding.Vertical + 2);
+        menu.Size = new Size(width, height + menu.Padding.Vertical);
     }
 
     protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e)
@@ -88,8 +102,10 @@ sealed class McMenuRenderer(Func<McAssets> assets) : ToolStripRenderer
     {
         if (!e.Item.Selected || !e.Item.Enabled) return;
         int s = Scale(e.ToolStrip!);
+        // The whole row inside the frame, whatever width WinForms gave the item.
+        var (left, right) = Edges(e.Item, s);
         using var hover = new SolidBrush(Color.FromArgb(0x40, 0xFF, 0xFF, 0xFF));
-        e.Graphics.FillRectangle(hover, new Rectangle(s, 0, e.Item.Width - 2 * s, e.Item.Height));
+        e.Graphics.FillRectangle(hover, RectangleF.FromLTRB((left + Inset) * s, 0, (right - Inset) * s, e.Item.Height));
     }
 
     protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
@@ -104,7 +120,8 @@ sealed class McMenuRenderer(Func<McAssets> assets) : ToolStripRenderer
         var state = g.Save();
         PixelArt(g, s);
         var font = assets().Font;
-        float x = (float)e.TextRectangle.X / s;
+        var (left, right) = Edges(item, s);
+        float x = left + TextX;
         if (Subtitle(item) is { } subtitle)
         {
             font.Draw(g, item.Text ?? "", style, x, 3);
@@ -116,7 +133,7 @@ sealed class McMenuRenderer(Func<McAssets> assets) : ToolStripRenderer
         {
             // The server list's play arrow, lit while hovered.
             string sprite = item.Selected ? "gui/sprites/server_list/join_highlighted.png" : "gui/sprites/server_list/join.png";
-            float px = (float)item.Width / s - PlaySize - 3, py = (item.Height / s - PlaySize) / 2f;
+            float px = right - Inset - Gap - PlaySize, py = (item.Height / s - PlaySize) / 2f;
             if (assets().Sprite(sprite) is { } play)
             {
                 // The arrow sits in the right half of the 32x32 sprite.
@@ -135,7 +152,7 @@ sealed class McMenuRenderer(Func<McAssets> assets) : ToolStripRenderer
         var g = e.Graphics;
         var state = g.Save();
         PixelArt(g, s);
-        var r = new RectangleF(5, (e.Item.Height / s - ImageSize) / 2f, ImageSize, ImageSize);
+        var r = new RectangleF(Edges(e.Item, s).left + IconX, (e.Item.Height / s - ImageSize) / 2f, ImageSize, ImageSize);
         if (e.Item is ToolStripMenuItem { Checked: true })
         {
             // Selected profile: a white frame around its icon, like a selected list entry.
@@ -161,15 +178,17 @@ sealed class McMenuRenderer(Func<McAssets> assets) : ToolStripRenderer
         var g = e.Graphics;
         var state = g.Save();
         PixelArt(g, s);
-        assets().Font.Draw(g, "✔", new McStyle(0x55FF55), 6, (e.Item.Height / s - 8) / 2f);
+        float x = Edges(e.Item, s).left + IconX + (ImageSize - 8) / 2f;
+        assets().Font.Draw(g, "✔", new McStyle(0x55FF55), x, (e.Item.Height / s - 8) / 2f);
         g.Restore(state);
     }
 
     protected override void OnRenderSeparator(ToolStripSeparatorRenderEventArgs e)
     {
         int s = Scale(e.ToolStrip!);
+        var (left, right) = Edges(e.Item, s);
         using var line = new SolidBrush(Color.FromArgb(0x50, 0x28, 0x00, 0x7F));
-        e.Graphics.FillRectangle(line, new Rectangle(4 * s, e.Item.Height / 2 - s / 2, e.Item.Width - 8 * s, s));
+        e.Graphics.FillRectangle(line, RectangleF.FromLTRB((left + Inset + 1) * s, e.Item.Height / 2 - s / 2, (right - Inset - 1) * s, e.Item.Height / 2 - s / 2 + s));
     }
 
     protected override void OnRenderArrow(ToolStripArrowRenderEventArgs e)
@@ -178,7 +197,8 @@ sealed class McMenuRenderer(Func<McAssets> assets) : ToolStripRenderer
         var g = e.Graphics;
         var state = g.Save();
         PixelArt(g, s);
-        assets().Font.Draw(g, ">", McStyle.White, (float)e.ArrowRectangle.X / s, (e.Item!.Height / s - 8) / 2f);
+        float x = Edges(e.Item, s).right - Inset - Gap - ArrowWidth;
+        assets().Font.Draw(g, ">", McStyle.White, x, (e.Item.Height / s - 8) / 2f);
         g.Restore(state);
     }
 }

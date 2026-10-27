@@ -81,6 +81,7 @@ sealed class TrayApp : IDisposable
             _menu.Show(-10000, -10000);
             var profiles = _menu.Items.OfType<ToolStripMenuItem>().First(i => i.HasDropDownItems);
             profiles.ShowDropDown();
+            profiles.DropDown.Items.OfType<ToolStripMenuItem>().FirstOrDefault(i => i.Tag is MenuTag { Header: true })?.Select();
             Application.DoEvents();
             var sub = profiles.DropDown;
             using var shot = new Bitmap(_menu.Width + sub.Width + 8, Math.Max(_menu.Height, sub.Height));
