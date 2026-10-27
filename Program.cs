@@ -56,7 +56,6 @@ sealed class TrayApp : IDisposable
     readonly NotifyIcon _tray = new();
     readonly ContextMenuStrip _menu = new();
     readonly System.Windows.Forms.Timer _timer = new();
-    readonly string _prismRoot = McProfile.PrismRoot();
     readonly ServerListForm _popup;
     McAssets _assets;
     McSound _click;
@@ -171,7 +170,7 @@ sealed class TrayApp : IDisposable
         var profiles = view.Entry.Profiles;
         string? instance = (profiles.FirstOrDefault(p => p.Id == _profile?.Id && p.PrismInstance != null)
             ?? profiles.FirstOrDefault(p => p.PrismInstance != null))?.PrismInstance;
-        string? exe = PrismExecutable();
+        string? exe = Launchers.PrismExecutable();
         if (instance == null || exe == null)
         {
             Clipboard.SetText(view.Entry.Address);
@@ -191,26 +190,12 @@ sealed class TrayApp : IDisposable
     void LaunchGame()
     {
         if (_profile == null) return;
-        string programs = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
-        string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         try
         {
-            switch (_profile)
-            {
-                case { PrismInstance: { } instance } when PrismExecutable() is { } prism:
-                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(prism) { ArgumentList = { "--launch", instance } });
-                    break;
-                case { Launcher: "Minecraft Launcher" }:
-                    System.Diagnostics.Process.Start("explorer.exe", @"shell:AppsFolder\Microsoft.4297127D64EC6_8wekyb3d8bbwe!Minecraft");
-                    break;
-                case { Launcher: "Modrinth App" } when new[] { Path.Combine(programs, "Modrinth App", "Modrinth App.exe"), Path.Combine(local, "Modrinth App", "Modrinth App.exe") }
-                        .FirstOrDefault(File.Exists) is { } modrinth:
-                    System.Diagnostics.Process.Start(modrinth);
-                    break;
-                default:
-                    _tray.ShowBalloonTip(5000, "Can't launch", $"Couldn't find the {_profile.Launcher}.", ToolTipIcon.Warning);
-                    break;
-            }
+            if (_profile.PrismInstance is { } instance && Launchers.PrismExecutable() is { } prism)
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(prism) { ArgumentList = { "--launch", instance } });
+            else
+                OpenLauncher(_profile.Launcher);
         }
         catch (System.ComponentModel.Win32Exception e)
         {
@@ -218,17 +203,17 @@ sealed class TrayApp : IDisposable
         }
     }
 
-    string? PrismExecutable()
+    void OpenLauncher(string launcher)
     {
-        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        string[] candidates =
-        [
-            Path.Combine(home, @"scoop\apps\prismlauncher\current\prismlauncher.exe"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Programs\PrismLauncher\prismlauncher.exe"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), @"PrismLauncher\prismlauncher.exe"),
-            Path.Combine(_prismRoot, "prismlauncher.exe"),
-        ];
-        return candidates.FirstOrDefault(File.Exists);
+        try
+        {
+            if (!Launchers.Open(launcher))
+                _tray.ShowBalloonTip(5000, "Can't launch", $"Couldn't find the {launcher}.", ToolTipIcon.Warning);
+        }
+        catch (System.ComponentModel.Win32Exception e)
+        {
+            _tray.ShowBalloonTip(5000, "Can't launch", e.Message, ToolTipIcon.Warning);
+        }
     }
 
     public void ShowPopup() => _popup.BeginInvoke(() =>
@@ -401,7 +386,7 @@ sealed class TrayApp : IDisposable
             _menu.Items.Add(new ToolStripMenuItem("Launch Game", ProfileImage(_profile), (_, _) => LaunchGame())
             {
                 Font = new Font(_menu.Font, FontStyle.Bold),
-                Tag = _profile.Name,
+                Tag = new MenuTag(Subtitle: _profile.Name),
             });
         _menu.Items.Add("Show servers", null, (_, _) => TogglePopup());
         _menu.Items.Add("Refresh now", null, async (_, _) => await PollAsync());
@@ -440,13 +425,19 @@ sealed class TrayApp : IDisposable
         menu.DropDownItems.Add(new ToolStripMenuItem("Automatic", null, (_, _) => SetDefaultProfile(null))
         {
             Checked = chosen == null,
-            Tag = $"Last played: {lastPlayed}",
+            Tag = new MenuTag(Subtitle: $"Last played: {lastPlayed}"),
         });
 
         foreach (var group in profiles.GroupBy(p => p.Launcher))
         {
             menu.DropDownItems.Add(new ToolStripSeparator());
-            menu.DropDownItems.Add(new ToolStripMenuItem(group.Key) { Enabled = false });
+            string launcher = group.Key;
+            // The launcher's heading opens the launcher itself (the play arrow on its right says so).
+            menu.DropDownItems.Add(new ToolStripMenuItem(launcher, Launchers.Icon(launcher), (_, _) => OpenLauncher(launcher))
+            {
+                Tag = new MenuTag(Header: true),
+                Enabled = Launchers.IsInstalled(launcher),
+            });
             foreach (var profile in group.OrderByDescending(p => p.LastLaunch))
                 menu.DropDownItems.Add(new ToolStripMenuItem(profile.Name, ProfileImage(profile), (_, _) => SetDefaultProfile(profile.Id))
                 {

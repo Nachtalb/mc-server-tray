@@ -2,16 +2,21 @@ using static McServerTray.McDraw;
 
 namespace McServerTray;
 
+/// Extra look for a menu item, via its Tag: a grey second line, or a group heading
+/// (grey text with a play arrow on the right, for headings that also launch something).
+sealed record MenuTag(string? Subtitle = null, bool Header = false);
+
 /// Draws the tray menu like a Minecraft tooltip: the pack's tooltip background and frame,
 /// the bitmap font with its shadow, and pixel-sharp item images.
-/// An item whose Tag is a string shows it as a grey second line under its text.
 sealed class McMenuRenderer(Func<McAssets> assets) : ToolStripRenderer
 {
     const int ItemHeight = 18;
     const int SubtitledHeight = 24;
     const int ImageSize = 16;
+    const int PlaySize = 12;
 
-    static string? Subtitle(ToolStripItem item) => item.Tag as string;
+    static string? Subtitle(ToolStripItem item) => (item.Tag as MenuTag)?.Subtitle;
+    static bool IsHeader(ToolStripItem item) => item.Tag is MenuTag { Header: true };
 
     /// GUI scale for the strip's monitor (2 at 100%, like the popup).
     static int Scale(ToolStrip strip) => Math.Max(1, (int)Math.Round(strip.DeviceDpi / 96.0 * 2));
@@ -31,7 +36,8 @@ sealed class McMenuRenderer(Func<McAssets> assets) : ToolStripRenderer
         float textWidth = items.Count == 0 ? 0 : items.Max(i => Math.Max(
             font.Width(i.Text ?? "") + (i.Font.Bold ? (i.Text ?? "").Length : 0),
             font.Width(Subtitle(i) ?? "")));
-        int width = (int)((ImageSize + 10 + textWidth + 16) * s);
+        int playRoom = menu.Items.Cast<ToolStripItem>().Any(IsHeader) ? PlaySize + 4 : 0;
+        int width = (int)((ImageSize + 10 + textWidth + 16 + playRoom) * s);
         int height = 0;
         foreach (ToolStripItem item in menu.Items)
         {
@@ -90,7 +96,9 @@ sealed class McMenuRenderer(Func<McAssets> assets) : ToolStripRenderer
     {
         int s = Scale(e.ToolStrip!);
         var item = e.Item;
-        int color = !item.Enabled ? 0x808080 : item is ToolStripMenuItem { Checked: true } ? 0xFFFF55 : 0xFFFFFF;
+        int color = !item.Enabled ? 0x808080
+            : IsHeader(item) ? (item.Selected ? 0xFFFFFF : 0xAAAAAA)
+            : item is ToolStripMenuItem { Checked: true } ? 0xFFFF55 : 0xFFFFFF;
         var style = new McStyle(color, Bold: item.Font.Bold);
         var g = e.Graphics;
         var state = g.Save();
@@ -103,6 +111,20 @@ sealed class McMenuRenderer(Func<McAssets> assets) : ToolStripRenderer
             font.Draw(g, subtitle, McStyle.Gray, x, 13);
         }
         else font.Draw(g, item.Text ?? "", style, x, (item.Height / s - 8) / 2f);
+
+        if (IsHeader(item) && item.Enabled)
+        {
+            // The server list's play arrow, lit while hovered.
+            string sprite = item.Selected ? "gui/sprites/server_list/join_highlighted.png" : "gui/sprites/server_list/join.png";
+            float px = (float)item.Width / s - PlaySize - 3, py = (item.Height / s - PlaySize) / 2f;
+            if (assets().Sprite(sprite) is { } play)
+            {
+                // The arrow sits in the right half of the 32x32 sprite.
+                var img = play.Image;
+                Blit(g, img, new RectangleF(px, py, PlaySize, PlaySize), new RectangleF(img.Width / 2f, img.Height / 4f, img.Width / 2f, img.Height / 2f));
+            }
+            else font.Draw(g, ">", McStyle.White, px + 4, py + 2);
+        }
         g.Restore(state);
     }
 
