@@ -15,8 +15,12 @@ static class Program
         if (snap >= 0 && snap + 1 < args.Length)
         {
             // Debug aid: render the server list to a PNG once the first ping is in, then exit.
+            // Optional: --mouse X,Y (GUI pixels) and --select ROW to check hover and selection.
+            string? Arg(string name) => Array.IndexOf(args, name) is int i and >= 0 && i + 1 < args.Length ? args[i + 1] : null;
+            var mouse = Arg("--mouse")?.Split(',').Select(int.Parse).ToArray() is [int mx, int my] ? new Point(mx, my) : new Point(-1, -1);
+            int select = int.TryParse(Arg("--select"), out int s) ? s : -1;
             using var shot = new TrayApp(showTray: false);
-            shot.SnapshotAsync(args[snap + 1]).ContinueWith(_ => Application.Exit(), TaskScheduler.FromCurrentSynchronizationContext());
+            shot.SnapshotAsync(args[snap + 1], mouse, select).ContinueWith(_ => Application.Exit(), TaskScheduler.FromCurrentSynchronizationContext());
             Application.Run();
             return;
         }
@@ -37,7 +41,8 @@ static class Program
     }
 }
 
-record ServerEntry(string Name, string Address, string? IconBase64);
+/// A saved server, with the Prism instances (folder names) that have it in their list.
+record ServerEntry(string Name, string Address, string? IconBase64, List<string> Instances);
 
 sealed class TrayApp : IDisposable
 {
@@ -62,10 +67,11 @@ sealed class TrayApp : IDisposable
     readonly Dictionary<string, Bitmap?> _iconCache = new();
     Task? _poll;
 
-    public async Task SnapshotAsync(string path)
+    public async Task SnapshotAsync(string path, Point mouse, int selectedRow)
     {
         await PollAsync();
         _popup.Relayout();
+        _popup.Simulate(mouse, selectedRow);
         using var bmp = new Bitmap(_popup.Width, _popup.Height);
         _popup.DrawToBitmap(bmp, new Rectangle(Point.Empty, _popup.Size));
         bmp.Save(path, ImageFormat.Png);
@@ -77,7 +83,7 @@ sealed class TrayApp : IDisposable
         (_iconIdle, _iconActive) = MakeTrayIcons(_assets.Sprite("block/grass_block_side.png")?.Image);
         _servers = LoadServers(_prismRoot);
 
-        _popup = new ServerListForm(_assets, Views, PollAsync);
+        _popup = new ServerListForm(_assets, Views, PollAsync, Join);
         // ShowPopup marshals onto the popup, which needs a handle even while it's hidden.
         _ = _popup.Handle;
 
@@ -118,6 +124,37 @@ sealed class TrayApp : IDisposable
         _popup.SetAssets(_assets);
         (_iconIdle, _iconActive) = MakeTrayIcons(_assets.Sprite("block/grass_block_side.png")?.Image);
         old.Dispose();
+    }
+
+    /// Starts the server's Prism instance straight into the server, preferring the instance we take the look from.
+    void Join(ServerView view)
+    {
+        string? exe = PrismExecutable();
+        if (exe == null)
+        {
+            _tray.ShowBalloonTip(5000, "Can't join", "Couldn't find prismlauncher.exe", ToolTipIcon.Warning);
+            return;
+        }
+        string? current = _profile != null ? Path.GetFileName(Path.GetDirectoryName(_profile.GameDir)) : null;
+        string instance = view.Entry.Instances.Contains(current ?? "") ? current! : view.Entry.Instances[0];
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(exe)
+        {
+            ArgumentList = { "--launch", instance, "--server", view.Entry.Address },
+            UseShellExecute = false,
+        });
+    }
+
+    string? PrismExecutable()
+    {
+        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        string[] candidates =
+        [
+            Path.Combine(home, @"scoop\apps\prismlauncher\current\prismlauncher.exe"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Programs\PrismLauncher\prismlauncher.exe"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), @"PrismLauncher\prismlauncher.exe"),
+            Path.Combine(_prismRoot, "prismlauncher.exe"),
+        ];
+        return candidates.FirstOrDefault(File.Exists);
     }
 
     public void ShowPopup() => _popup.BeginInvoke(() =>
@@ -165,7 +202,7 @@ sealed class TrayApp : IDisposable
     static List<ServerEntry> LoadServers(string prismRoot)
     {
         var result = new List<ServerEntry>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seen = new Dictionary<string, ServerEntry>(StringComparer.OrdinalIgnoreCase);
         string dir = Path.Combine(prismRoot, "instances");
         if (!Directory.Exists(dir)) return result;
 
@@ -183,9 +220,16 @@ sealed class TrayApp : IDisposable
                     foreach (var s in servers.OfType<Dictionary<string, object?>>())
                     {
                         if (s.GetValueOrDefault("ip") is not string ip || string.IsNullOrWhiteSpace(ip)) continue;
-                        if (!seen.Add(ip)) continue;
+                        string id = Path.GetFileName(instance);
+                        if (seen.TryGetValue(ip, out var existing))
+                        {
+                            if (!existing.Instances.Contains(id)) existing.Instances.Add(id);
+                            continue;
+                        }
                         string name = s.GetValueOrDefault("name") as string ?? ip;
-                        result.Add(new ServerEntry(name, ip, s.GetValueOrDefault("icon") as string));
+                        var entry = new ServerEntry(name, ip, s.GetValueOrDefault("icon") as string, [id]);
+                        seen[ip] = entry;
+                        result.Add(entry);
                     }
                 }
                 catch

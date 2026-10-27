@@ -21,20 +21,23 @@ sealed class ServerListForm : Form
 
     readonly Func<IReadOnlyList<ServerView>> _views;
     readonly Func<Task> _refresh;
+    readonly Action<ServerView> _join;
     readonly System.Windows.Forms.Timer _anim = new() { Interval = 100 };
     readonly ImageAttributes _clamp = new();
     McAssets _assets;
     McSound _click;
     int _scale = 2;
     Point _mouse = new(-1, -1);
+    string? _selected;
     long _hiddenAt;
 
-    public ServerListForm(McAssets assets, Func<IReadOnlyList<ServerView>> views, Func<Task> refresh)
+    public ServerListForm(McAssets assets, Func<IReadOnlyList<ServerView>> views, Func<Task> refresh, Action<ServerView> join)
     {
         _assets = assets;
         _click = new McSound(assets.Sound("random/click"), 0.25f);
         _views = views;
         _refresh = refresh;
+        _join = join;
         _clamp.SetWrapMode(WrapMode.TileFlipXY);
 
         FormBorderStyle = FormBorderStyle.None;
@@ -116,9 +119,13 @@ sealed class ServerListForm : Form
     int ListBottom => GuiHeight - FooterHeight;
     int RowLeft => (Width0 - RowWidth) / 2;
     int RowTop(int i) => ListTop + 4 + i * RowHeight;
-    Rectangle RefreshButton => new(Width0 / 2 - ButtonWidth - 2, ListBottom + 5, ButtonWidth, ButtonHeight);
-    Rectangle DoneButton => new(Width0 / 2 + 2, ListBottom + 5, ButtonWidth, ButtonHeight);
+    int ButtonsLeft => (Width0 - 3 * ButtonWidth - 8) / 2;
+    Rectangle JoinButton => new(ButtonsLeft, ListBottom + 5, ButtonWidth, ButtonHeight);
+    Rectangle RefreshButton => new(ButtonsLeft + ButtonWidth + 4, ListBottom + 5, ButtonWidth, ButtonHeight);
+    Rectangle DoneButton => new(ButtonsLeft + 2 * (ButtonWidth + 4), ListBottom + 5, ButtonWidth, ButtonHeight);
     Point GuiMouse => _mouse.X < 0 ? new Point(-1, -1) : new Point(_mouse.X / _scale, _mouse.Y / _scale);
+
+    ServerView? Selected => _views().FirstOrDefault(v => v.Entry.Address == _selected);
 
     int RowAt(Point p)
     {
@@ -127,6 +134,15 @@ sealed class ServerListForm : Form
         for (int i = 0; i < count; i++)
             if (p.Y >= RowTop(i) - 2 && p.Y < RowTop(i) - 2 + RowHeight) return i;
         return -1;
+    }
+
+    /// Debug aid for --snapshot: pretend the mouse is at a GUI position and a row is selected.
+    public void Simulate(Point guiMouse, int selectedRow)
+    {
+        _scale = Math.Max(1, (int)Math.Round(DeviceDpi / 96.0 * 2));
+        _mouse = new Point(guiMouse.X * _scale + _scale / 2, guiMouse.Y * _scale + _scale / 2);
+        var views = _views();
+        _selected = selectedRow >= 0 && selectedRow < views.Count ? views[selectedRow].Entry.Address : null;
     }
 
     protected override void OnMouseMove(MouseEventArgs e)
@@ -145,7 +161,32 @@ sealed class ServerListForm : Form
     {
         if (e.Button != MouseButtons.Left) return;
         var p = GuiMouse;
-        if (RefreshButton.Contains(p))
+        var views = _views();
+
+        int row = RowAt(p);
+        if (row >= 0)
+        {
+            var view = views[row];
+            // Like the game: clicking the play arrow over the icon joins straight away.
+            if (p.X - RowLeft < 32 && view.Status != null)
+            {
+                _selected = view.Entry.Address;
+                _click.Play();
+                Join(view);
+                return;
+            }
+            // Clicking the selected server again deselects it.
+            _selected = _selected == view.Entry.Address ? null : view.Entry.Address;
+            Invalidate();
+            return;
+        }
+
+        if (JoinButton.Contains(p) && Selected is { } sel)
+        {
+            _click.Play();
+            Join(sel);
+        }
+        else if (RefreshButton.Contains(p))
         {
             _click.Play();
             await _refresh();
@@ -157,9 +198,38 @@ sealed class ServerListForm : Form
         }
     }
 
+    protected override void OnMouseDoubleClick(MouseEventArgs e)
+    {
+        int row = RowAt(GuiMouse);
+        if (e.Button == MouseButtons.Left && row >= 0) Join(_views()[row]);
+    }
+
     protected override void OnKeyDown(KeyEventArgs e)
     {
-        if (e.KeyCode == Keys.Escape) HidePopup();
+        var views = _views();
+        int current = views.ToList().FindIndex(v => v.Entry.Address == _selected);
+        switch (e.KeyCode)
+        {
+            case Keys.Escape:
+                HidePopup();
+                break;
+            case Keys.Up when views.Count > 0:
+                _selected = views[Math.Max(0, current - 1)].Entry.Address;
+                break;
+            case Keys.Down when views.Count > 0:
+                _selected = views[Math.Min(views.Count - 1, current + 1)].Entry.Address;
+                break;
+            case Keys.Enter when Selected is { } sel:
+                Join(sel);
+                break;
+        }
+        Invalidate();
+    }
+
+    void Join(ServerView view)
+    {
+        HidePopup();
+        _join(view);
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -196,17 +266,19 @@ sealed class ServerListForm : Form
         for (int i = 0; i < views.Count; i++)
         {
             int top = RowTop(i);
-            if (hoveredRow == i)
+            bool selected = views[i].Entry.Address == _selected;
+            if (selected)
             {
-                var box = new Rectangle(RowLeft - 2, top - 2, RowWidth + 4, RowHeight);
-                Fill(g, box, 0x808080);
+                var box = new Rectangle(RowLeft - 2, top - 2, RowWidth + 4, RowHeight - 4 + 4);
+                Fill(g, box, 0xFFFFFF);
                 Fill(g, Rectangle.Inflate(box, -1, -1), 0x000000);
             }
-            tooltip = DrawEntry(g, views[i], RowLeft, top, mouse) ?? tooltip;
+            tooltip = DrawEntry(g, views[i], RowLeft, top, mouse, hoveredRow == i || selected) ?? tooltip;
         }
 
-        DrawButton(g, RefreshButton, "Refresh", mouse);
-        DrawButton(g, DoneButton, "Done", mouse);
+        DrawButton(g, JoinButton, "Join Server", mouse, enabled: Selected is { Status: not null });
+        DrawButton(g, RefreshButton, "Refresh", mouse, enabled: true);
+        DrawButton(g, DoneButton, "Done", mouse, enabled: true);
 
         // A thin frame so the popup sits on the desktop like a window rather than a loose rectangle.
         Fill(g, new Rectangle(0, 0, Width0, Frame), 0x000000);
@@ -218,7 +290,7 @@ sealed class ServerListForm : Form
     }
 
     /// One server row; returns tooltip text if the mouse is over the player count or ping icon.
-    List<StyledChar>? DrawEntry(Graphics g, ServerView view, int x, int y, Point mouse)
+    List<StyledChar>? DrawEntry(Graphics g, ServerView view, int x, int y, Point mouse, bool showJoin)
     {
         var font = _assets.Font;
         var status = view.Status;
@@ -227,6 +299,17 @@ sealed class ServerListForm : Form
         var iconRect = new RectangleF(x, y, 32, 32);
         if (view.Icon is { } icon) Blit(g, icon, iconRect);
         else if (_assets.Sprite("misc/unknown_server.png") is { } unknown) Blit(g, unknown.Image, iconRect);
+
+        // The play arrow over a dimmed icon, highlighted while the mouse is on its right half.
+        if (showJoin && status != null)
+        {
+            using (var dim = new SolidBrush(Color.FromArgb(0xA0, 0x90, 0x90, 0x90)))
+                g.FillRectangle(dim, iconRect);
+            int rel = mouse.X - x;
+            bool hot = mouse.Y >= y && mouse.Y < y + 32 && rel > 16 && rel < 32;
+            if (_assets.Sprite(hot ? "gui/sprites/server_list/join_highlighted.png" : "gui/sprites/server_list/join.png") is { } join)
+                Blit(g, join.Image, iconRect);
+        }
 
         font.Draw(g, view.Entry.Name, McStyle.White, x + 35, y + 1);
 
@@ -299,18 +382,21 @@ sealed class ServerListForm : Form
         return tooltip;
     }
 
-    void DrawButton(Graphics g, Rectangle r, string label, Point mouse)
+    void DrawButton(Graphics g, Rectangle r, string label, Point mouse, bool enabled)
     {
-        bool hover = r.Contains(mouse);
-        if (_assets.Sprite(hover ? "gui/sprites/widget/button_highlighted.png" : "gui/sprites/widget/button.png") is { } tex)
-            DrawSprite(g, tex, r);
+        bool hover = enabled && r.Contains(mouse);
+        string sprite = !enabled ? "gui/sprites/widget/button_disabled.png"
+            : hover ? "gui/sprites/widget/button_highlighted.png"
+            : "gui/sprites/widget/button.png";
+        if (_assets.Sprite(sprite) is { } tex) DrawSprite(g, tex, r);
         else
         {
             Fill(g, r, hover ? 0xFFFFFF : 0x000000);
-            Fill(g, Rectangle.Inflate(r, -1, -1), 0x6F6F6F);
+            Fill(g, Rectangle.Inflate(r, -1, -1), enabled ? 0x6F6F6F : 0x2F2F2F);
         }
         var font = _assets.Font;
-        font.Draw(g, label, McStyle.White, r.X + (r.Width - font.Width(label)) / 2, r.Y + (r.Height - 8) / 2);
+        var style = new McStyle(enabled ? 0xFFFFFF : 0xA0A0A0);
+        font.Draw(g, label, style, r.X + (r.Width - font.Width(label)) / 2, r.Y + (r.Height - 8) / 2);
     }
 
     void DrawTooltip(Graphics g, List<StyledChar> text, Point mouse, int height)
